@@ -252,4 +252,74 @@ describe('TrustFlowEscrowClient.getGigs', () => {
     );
   });
 
+  describe('parameter validation (#470)', () => {
+    it('rejects an invalid Date for createdAfter/createdBefore without throwing RangeError', async () => {
+      const client = new TrustFlowEscrowClient({ ...BASE_CONTRACT_CONFIG, apiBaseUrl: API_BASE });
+
+      const invalidDate = new Date('not-a-date');
+      const resAfter = await client.getGigs({ createdAfter: invalidDate });
+      expect(resAfter.ok).toBe(false);
+      expect(resAfter.error).toMatch(/createdAfter/);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resBefore = await client.getGigs({ createdBefore: invalidDate });
+      expect(resBefore.ok).toBe(false);
+      expect(resBefore.error).toMatch(/createdBefore/);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resBadString = await client.getGigs({ createdAfter: 'invalid-date-string' });
+      expect(resBadString.ok).toBe(false);
+      expect(resBadString.error).toMatch(/createdAfter/);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+    });
+
+    it('rejects negative or NaN amount for minAmount/maxAmount', async () => {
+      const client = new TrustFlowEscrowClient({ ...BASE_CONTRACT_CONFIG, apiBaseUrl: API_BASE });
+
+      const resNegMin = await client.getGigs({ minAmount: -100 });
+      expect(resNegMin.ok).toBe(false);
+      expect(resNegMin.error).toMatch(/minAmount.*negative/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resNegMax = await client.getGigs({ maxAmount: -50n });
+      expect(resNegMax.ok).toBe(false);
+      expect(resNegMax.error).toMatch(/maxAmount.*negative/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resNanMin = await client.getGigs({ minAmount: NaN });
+      expect(resNanMin.ok).toBe(false);
+      expect(resNanMin.error).toMatch(/minAmount.*valid/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resBadStrAmount = await client.getGigs({ maxAmount: 'not-a-number' });
+      expect(resBadStrAmount.ok).toBe(false);
+      expect(resBadStrAmount.error).toMatch(/maxAmount.*valid/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+    });
+
+    it('rejects minAmount > maxAmount', async () => {
+      const client = new TrustFlowEscrowClient({ ...BASE_CONTRACT_CONFIG, apiBaseUrl: API_BASE });
+
+      const res = await client.getGigs({ minAmount: 1000, maxAmount: 500 });
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/minAmount cannot be greater than maxAmount/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid sortBy and sortOrder', async () => {
+      const client = new TrustFlowEscrowClient({ ...BASE_CONTRACT_CONFIG, apiBaseUrl: API_BASE });
+
+      const resSortBy = await client.getGigs({ sortBy: 'invalid_field' as any });
+      expect(resSortBy.ok).toBe(false);
+      expect(resSortBy.error).toMatch(/sortBy/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+
+      const resSortOrder = await client.getGigs({ sortOrder: 'sideways' as any });
+      expect(resSortOrder.ok).toBe(false);
+      expect(resSortOrder.error).toMatch(/sortOrder/i);
+      expect(mockHttpGet).not.toHaveBeenCalled();
+    });
+  });
+
 });
+

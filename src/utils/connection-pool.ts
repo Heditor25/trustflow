@@ -177,3 +177,57 @@ export function monitorPoolHealth(agent: PooledAgent, config?: PoolMonitorConfig
 
   return () => clearInterval(interval);
 }
+
+const activePools = new Set<PooledAgent>();
+
+/**
+ * Registers an agent in the active pool registry for tracking.
+ */
+export function registerPoolAgent(agent: PooledAgent): void {
+  activePools.add(agent);
+}
+
+/**
+ * Unregisters an agent from the active pool registry.
+ */
+export function unregisterPoolAgent(agent: PooledAgent): void {
+  activePools.delete(agent);
+}
+
+/**
+ * Destroys all registered pooled connection agents.
+ */
+export function destroyAllPoolAgents(): void {
+  for (const agent of activePools) {
+    try {
+      agent.destroy();
+    } catch {
+      // ignore
+    }
+  }
+  activePools.clear();
+}
+
+/**
+ * Attaches an abort listener to destroy underlying sockets on aborted fetch calls,
+ * preventing socket / file descriptor leakage (Issue #359).
+ */
+export function trackAndDestroyOnAbort(
+  socketOrReq: { destroy?: () => void; socket?: { destroy?: () => void } },
+  signal?: AbortSignal,
+): () => void {
+  if (!signal) return () => {};
+  const onAbort = () => {
+    if (typeof socketOrReq.destroy === 'function') {
+      socketOrReq.destroy();
+    } else if (socketOrReq.socket && typeof socketOrReq.socket.destroy === 'function') {
+      socketOrReq.socket.destroy();
+    }
+  };
+  if (signal.aborted) {
+    onAbort();
+    return () => {};
+  }
+  signal.addEventListener('abort', onAbort, { once: true });
+  return () => signal.removeEventListener('abort', onAbort);
+}

@@ -696,7 +696,10 @@ export class SorobanSpec {
           if (typeof errVal === 'number') {
             return xdr.ScVal.scvError(xdr.ScError.sceContract(errVal));
           }
-          throw new TrustFlowError(`Unknown error case ${String(errVal)} in ${path}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Unknown error case ${String(errVal)} in ${path}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         if ('ok' in val) {
           return this.valToScVal((val as { ok: unknown }).ok, resDef.okType(), `${path}.ok`);
@@ -714,7 +717,10 @@ export class SorobanSpec {
             found = enumSpec.cases.find((c) => c.value === val);
           }
           if (!found) {
-            throw new TrustFlowError(`Unknown enum case '${String(val)}' in ${path}`, 'INVALID_CONTRACT_CALL');
+            throw new TrustFlowError(
+              `Unknown enum case '${String(val)}' in ${path}`,
+              'INVALID_CONTRACT_CALL',
+            );
           }
           return xdr.ScVal.scvU32(found.value);
         }
@@ -726,7 +732,10 @@ export class SorobanSpec {
           const tag = (val as { tag: string }).tag;
           const caseSpec = unionSpec.cases.find((c) => c.name === tag);
           if (!caseSpec) {
-            throw new TrustFlowError(`Unknown union case '${tag}' in ${path}`, 'INVALID_CONTRACT_CALL');
+            throw new TrustFlowError(
+              `Unknown union case '${tag}' in ${path}`,
+              'INVALID_CONTRACT_CALL',
+            );
           }
           if (!caseSpec.typeList || caseSpec.typeList.length === 0) {
             return xdr.ScVal.scvVec([nativeToScVal(tag, { type: 'symbol' })]);
@@ -788,7 +797,7 @@ export class SorobanSpec {
             }
           }
           const mapEntries = structSpec.fields
-            .filter((field) => (field.name in record) && record[field.name] !== undefined)
+            .filter((field) => field.name in record && record[field.name] !== undefined)
             .map(
               (field) =>
                 new xdr.ScMapEntry({
@@ -811,10 +820,7 @@ export class SorobanSpec {
    * @param methodName - Function name defined in contract spec
    * @param scVal - ScVal returned from contract simulation or execution, or raw base64/hex XDR
    */
-  decodeReturnValue(
-    methodName: string,
-    scVal: xdr.ScVal | string | Uint8Array | Buffer,
-  ): unknown {
+  decodeReturnValue(methodName: string, scVal: xdr.ScVal | string | Uint8Array | Buffer): unknown {
     const fnSpec = this.functions.get(methodName);
     if (!fnSpec) {
       throw new TrustFlowError(
@@ -845,108 +851,162 @@ export class SorobanSpec {
     switch (kind) {
       case 'scSpecTypeVoid': {
         if (scVal.switch().name !== 'scvVoid') {
-          throw new TrustFlowError(`Expected void, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected void, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return null;
       }
       case 'scSpecTypeBool': {
         if (scVal.switch().name !== 'scvBool') {
-          throw new TrustFlowError(`Expected bool, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected bool, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.b();
       }
       case 'scSpecTypeU32': {
         if (scVal.switch().name !== 'scvU32') {
-          throw new TrustFlowError(`Expected u32, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected u32, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.u32();
       }
       case 'scSpecTypeI32': {
         if (scVal.switch().name !== 'scvI32') {
-          throw new TrustFlowError(`Expected i32, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected i32, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.i32();
       }
       case 'scSpecTypeU64': {
         if (scVal.switch().name !== 'scvU64') {
-          throw new TrustFlowError(`Expected u64, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected u64, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeI64': {
         if (scVal.switch().name !== 'scvI64') {
-          throw new TrustFlowError(`Expected i64, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected i64, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeTimepoint': {
         if (scVal.switch().name !== 'scvTimepoint') {
-          throw new TrustFlowError(`Expected timepoint, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected timepoint, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeDuration': {
         if (scVal.switch().name !== 'scvDuration') {
-          throw new TrustFlowError(`Expected duration, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected duration, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeU128': {
         if (scVal.switch().name !== 'scvU128') {
-          throw new TrustFlowError(`Expected u128, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected u128, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeI128': {
         if (scVal.switch().name !== 'scvI128') {
-          throw new TrustFlowError(`Expected i128, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected i128, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeU256': {
         if (scVal.switch().name !== 'scvU256') {
-          throw new TrustFlowError(`Expected u256, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected u256, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeI256': {
         if (scVal.switch().name !== 'scvI256') {
-          throw new TrustFlowError(`Expected i256, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected i256, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
       case 'scSpecTypeBytes': {
         if (scVal.switch().name !== 'scvBytes') {
-          throw new TrustFlowError(`Expected bytes, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected bytes, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.bytes();
       }
       case 'scSpecTypeBytesN': {
         if (scVal.switch().name !== 'scvBytes') {
-          throw new TrustFlowError(`Expected bytes, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected bytes, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         const n = typeDef.bytesN().n();
         const buf = scVal.bytes();
         if (buf.length !== n) {
-          throw new TrustFlowError(`Expected BytesN(${n}), got length ${buf.length}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected BytesN(${n}), got length ${buf.length}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return buf;
       }
       case 'scSpecTypeString': {
         if (scVal.switch().name !== 'scvString') {
-          throw new TrustFlowError(`Expected string, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected string, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.str().toString();
       }
       case 'scSpecTypeSymbol': {
         if (scVal.switch().name !== 'scvSymbol') {
-          throw new TrustFlowError(`Expected symbol, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected symbol, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scVal.sym().toString();
       }
       case 'scSpecTypeAddress': {
         if (scVal.switch().name !== 'scvAddress') {
-          throw new TrustFlowError(`Expected address, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected address, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         return scValToNative(scVal);
       }
@@ -958,7 +1018,10 @@ export class SorobanSpec {
       }
       case 'scSpecTypeVec': {
         if (scVal.switch().name !== 'scvVec') {
-          throw new TrustFlowError(`Expected vec, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected vec, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         const elemType = typeDef.vec().elementType();
         const vec = scVal.vec() || [];
@@ -966,7 +1029,10 @@ export class SorobanSpec {
       }
       case 'scSpecTypeMap': {
         if (scVal.switch().name !== 'scvMap') {
-          throw new TrustFlowError(`Expected map, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected map, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         const keyType = typeDef.map().keyType();
         const valType = typeDef.map().valueType();
@@ -981,7 +1047,10 @@ export class SorobanSpec {
       }
       case 'scSpecTypeTuple': {
         if (scVal.switch().name !== 'scvVec') {
-          throw new TrustFlowError(`Expected vec for tuple, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+          throw new TrustFlowError(
+            `Expected vec for tuple, got ${scVal.switch().name}`,
+            'INVALID_CONTRACT_CALL',
+          );
         }
         const types = typeDef.tuple().valueTypes();
         const vec = scVal.vec() || [];
@@ -1024,13 +1093,19 @@ export class SorobanSpec {
         const unionSpec = this.unions.get(udtName);
         if (unionSpec) {
           if (scVal.switch().name !== 'scvVec') {
-            throw new TrustFlowError(`Expected vec for union ${udtName}, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+            throw new TrustFlowError(
+              `Expected vec for union ${udtName}, got ${scVal.switch().name}`,
+              'INVALID_CONTRACT_CALL',
+            );
           }
           const vec = scVal.vec() || [];
           if (vec.length === 0) {
             throw new TrustFlowError(`Empty vec for union ${udtName}`, 'INVALID_CONTRACT_CALL');
           }
-          const tag = vec[0].switch().name === 'scvSymbol' ? vec[0].sym().toString() : String(scValToNative(vec[0]));
+          const tag =
+            vec[0].switch().name === 'scvSymbol'
+              ? vec[0].sym().toString()
+              : String(scValToNative(vec[0]));
           const caseSpec = unionSpec.cases.find((c) => c.name === tag);
           if (!caseSpec) {
             throw new TrustFlowError(`Unknown union case: ${tag}`, 'INVALID_CONTRACT_CALL');
@@ -1048,7 +1123,10 @@ export class SorobanSpec {
           const isTuple = structSpec.fields.every((f, i) => f.name === String(i));
           if (isTuple) {
             if (scVal.switch().name !== 'scvVec') {
-              throw new TrustFlowError(`Expected vec for tuple struct ${udtName}, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+              throw new TrustFlowError(
+                `Expected vec for tuple struct ${udtName}, got ${scVal.switch().name}`,
+                'INVALID_CONTRACT_CALL',
+              );
             }
             const vec = scVal.vec() || [];
             if (vec.length !== structSpec.fields.length) {
@@ -1057,10 +1135,15 @@ export class SorobanSpec {
                 'INVALID_CONTRACT_CALL',
               );
             }
-            return vec.map((item, idx) => this.scValToNativeTyped(item, structSpec.fields[idx].type));
+            return vec.map((item, idx) =>
+              this.scValToNativeTyped(item, structSpec.fields[idx].type),
+            );
           }
           if (scVal.switch().name !== 'scvMap') {
-            throw new TrustFlowError(`Expected map for struct ${udtName}, got ${scVal.switch().name}`, 'INVALID_CONTRACT_CALL');
+            throw new TrustFlowError(
+              `Expected map for struct ${udtName}, got ${scVal.switch().name}`,
+              'INVALID_CONTRACT_CALL',
+            );
           }
           const map = scVal.map() || [];
           const obj: Record<string, unknown> = {};

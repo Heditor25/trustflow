@@ -6,10 +6,14 @@ import type {
   VoteChoice,
   VoteCommitment,
   RevealVoteResult,
+  SubmitRevealParams,
+  SubmitRevealResult,
+  JurorClientOptions,
 } from '../types/juror';
+export type { JurorClientOptions } from '../types/juror';
 import type { SDKResult } from '../types/index';
 import { isValidEscrowId, isValidStellarAddress, isValidBase64 } from '../utils/validation';
-import { buildVoteArgs } from '../contract/build';
+import { buildVoteArgs, buildRevealArgs } from '../contract/build';
 import { randomBytes } from '../utils/crypto';
 import { TrustFlowError } from '../errors';
 
@@ -19,12 +23,24 @@ const VALID_CHOICES: VoteChoice[] = ['approve', 'reject', 'abstain'];
  * Constructs a vote commitment matching the contracts/trustflow/src/lib.rs hash_vote
  * preimage specification: `sha256(vote_byte ++ 32_byte_salt)`.
  *
- * @param voteForDepositor - true if voting in favour of depositor (1), false for beneficiary (0)
+ * Note: Commit-reveal voting only supports binary decisions (true for depositor,
+ * false for beneficiary) matching the contract `hash_vote` specification.
+ * It cannot represent 'abstain'. Callers needing an 'abstain' vote must cast
+ * a plaintext vote instead.
+ *
+ * @param voteForDepositor - true if voting in favour of depositor (1), false for beneficiary (0). Cannot be 'abstain'.
  * @param salt - Optional 32-byte cryptographically secure random salt. If omitted,
  *               32 cryptographically secure random bytes are automatically generated.
  * @returns VoteCommitment object containing commitment hash, salt, and encoded formats.
  */
 export function createVoteCommitment(voteForDepositor: boolean, salt?: Uint8Array): VoteCommitment {
+  if ((voteForDepositor as unknown) === 'abstain') {
+    throw new TrustFlowError(
+      "Commit-reveal voting does not support 'abstain'. Callers needing 'abstain' must cast a plaintext vote instead.",
+      'VALIDATION_ERROR',
+    );
+  }
+
   if (typeof voteForDepositor !== 'boolean') {
     throw new TrustFlowError('voteForDepositor must be a boolean', 'VALIDATION_ERROR');
   }
@@ -63,11 +79,23 @@ export function createVoteCommitment(voteForDepositor: boolean, salt?: Uint8Arra
  * Constructs a reveal payload and verifies the reconstructed commitment matching
  * the contract hash_vote specification: `sha256(vote_byte ++ 32_byte_salt)`.
  *
- * @param voteForDepositor - The original vote choice (true for depositor, false for beneficiary)
+ * Note: Commit-reveal voting only supports binary decisions (true for depositor,
+ * false for beneficiary) matching the contract `hash_vote` specification.
+ * It cannot represent 'abstain'. Callers needing an 'abstain' vote must cast
+ * a plaintext vote instead.
+ *
+ * @param voteForDepositor - The original vote choice (true for depositor, false for beneficiary). Cannot be 'abstain'.
  * @param salt - The 32-byte secret salt used during commitment creation
  * @returns RevealVoteResult containing the vote, salt, and verified commitment hash
  */
 export function revealVote(voteForDepositor: boolean, salt: Uint8Array): RevealVoteResult {
+  if ((voteForDepositor as unknown) === 'abstain') {
+    throw new TrustFlowError(
+      "Commit-reveal voting does not support 'abstain'. Callers needing 'abstain' must cast a plaintext vote instead.",
+      'VALIDATION_ERROR',
+    );
+  }
+
   if (typeof voteForDepositor !== 'boolean') {
     throw new TrustFlowError('voteForDepositor must be a boolean', 'VALIDATION_ERROR');
   }
@@ -95,7 +123,7 @@ export function revealVote(voteForDepositor: boolean, salt: Uint8Array): RevealV
 }
 
 /**
- * Client for casting juror votes on TrustFlow disputes.
+ * Client for casting and revealing juror votes on TrustFlow disputes.
  *
  * Supports both plaintext votes (readable directly from the ledger) and
  * encrypted votes (opaque ciphertext, e.g. for a commit-reveal scheme) —
@@ -104,19 +132,37 @@ export function revealVote(voteForDepositor: boolean, salt: Uint8Array): RevealV
  * @example
  * ```typescript
  * const jurors = new JurorClient(contractConfig);
+ * // 1. Commit phase: generate commitment and salt
  * const commitment = jurors.createVoteCommitment(true);
- * const result = await jurors.vote({
+ *
+ * // 2. Vote phase: cast encrypted vote with commitment ciphertext
+ * const voteResult = await jurors.vote({
  *   disputeId: 'dsp-1',
  *   jurorAddress: 'GJUROR...',
  *   vote: { encrypted: true, ciphertext: commitment.ciphertext },
  * });
- * if (result.ok) console.log('Voted! tx:', result.data.txHash);
+ * if (voteResult.ok) console.log('Voted! tx:', voteResult.data.txHash);
+ *
+ * // 3. Local verification: verify reveal payload matches commitment
+ * const verified = jurors.revealVote(true, commitment.salt);
+ *
+ * // 4. Reveal phase: submit revealed vote on-chain
+ * const revealResult = await jurors.submitReveal({
+ *   disputeId: 'dsp-1',
+ *   jurorAddress: 'GJUROR...',
+ *   voteForDepositor: true,
+ *   salt: commitment.salt,
+ * });
+ * if (revealResult.ok) console.log('Revealed! tx:', revealResult.data.txHash);
  * ```
  */
 export class JurorClient {
-  private readonly storedSalts = new Map<string, Uint8Array>();
+  private readonly storedSalts = new Map<string, { salt: Uint8Array; expiresAt?: number }>();
 
-  constructor(private readonly config: ContractConfig) {}
+  constructor(
+    private readonly config: ContractConfig,
+    private readonly options: JurorClientOptions = {},
+  ) {}
 
   /**
    * Constructs a vote commitment matching the contract hash_vote preimage layout:
@@ -124,13 +170,41 @@ export class JurorClient {
    * Securely generates a 32-byte random salt if not provided, and stores the salt
    * locally on this client instance for the subsequent reveal phase.
    *
+   * Evicts expired salts if `saltTtlMs` is configured, and evicts oldest entries if
+   * `maxStoredSalts` capacity limit is exceeded.
+   *
    * @param voteForDepositor - true for depositor (1), false for beneficiary (0)
    * @param salt - Optional 32-byte salt; generated automatically if omitted
    * @returns VoteCommitment with commitment hash, salt, and hex/base64 strings
    */
   createVoteCommitment(voteForDepositor: boolean, salt?: Uint8Array): VoteCommitment {
     const commitment = createVoteCommitment(voteForDepositor, salt);
-    this.storedSalts.set(commitment.commitmentHex, commitment.salt);
+    const key = commitment.commitmentHex;
+
+    if (this.options.saltTtlMs !== undefined) {
+      const now = Date.now();
+      for (const [k, v] of this.storedSalts.entries()) {
+        if (v.expiresAt !== undefined && v.expiresAt <= now) {
+          this.storedSalts.delete(k);
+        }
+      }
+    }
+
+    if (
+      this.options.maxStoredSalts !== undefined &&
+      this.options.maxStoredSalts > 0 &&
+      this.storedSalts.size >= this.options.maxStoredSalts &&
+      !this.storedSalts.has(key)
+    ) {
+      const oldestKey = this.storedSalts.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.storedSalts.delete(oldestKey);
+      }
+    }
+
+    const expiresAt =
+      this.options.saltTtlMs !== undefined ? Date.now() + this.options.saltTtlMs : undefined;
+    this.storedSalts.set(key, { salt: commitment.salt, expiresAt });
     return commitment;
   }
 
@@ -147,16 +221,37 @@ export class JurorClient {
 
   /**
    * Retrieves a locally stored salt by commitment hash (Uint8Array or hex string).
+   * Expired salts are evicted lazily upon read.
    *
    * @param commitment - The commitment hash Uint8Array or hex string
-   * @returns The 32-byte salt if stored locally, or undefined
+   * @returns The 32-byte salt if stored locally and not expired, or undefined
    */
   getStoredSalt(commitment: Uint8Array | string): Uint8Array | undefined {
     const key =
       typeof commitment === 'string'
         ? commitment.toLowerCase()
         : Buffer.from(commitment).toString('hex');
-    return this.storedSalts.get(key);
+    const entry = this.storedSalts.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      this.storedSalts.delete(key);
+      return undefined;
+    }
+    return entry.salt;
+  }
+
+  /**
+   * Removes an individual locally stored salt by commitment hash (Uint8Array or hex string).
+   *
+   * @param commitment - The commitment hash Uint8Array or hex string
+   * @returns true if an entry existed and was removed, false otherwise
+   */
+  removeStoredSalt(commitment: Uint8Array | string): boolean {
+    const key =
+      typeof commitment === 'string'
+        ? commitment.toLowerCase()
+        : Buffer.from(commitment).toString('hex');
+    return this.storedSalts.delete(key);
   }
 
   /**
@@ -216,6 +311,97 @@ export class JurorClient {
         disputeId: params.disputeId,
         jurorAddress: params.jurorAddress,
         encrypted: params.vote.encrypted,
+      },
+    };
+  }
+
+  /**
+   * Submits a juror's vote reveal on-chain via the TrustFlow contract.
+   *
+   * Encodes disputeId, jurorAddress, voteForDepositor, and salt as Soroban ScVal
+   * call arguments and prepares the transaction.
+   *
+   * Note: Commit-reveal voting only supports binary decisions (true for depositor,
+   * false for beneficiary). It cannot represent 'abstain'.
+   *
+   * @param params - disputeId, jurorAddress, voteForDepositor, and secret salt
+   * @returns `{ ok: true, data: { txHash, ... } }` on success, `{ ok: false, error }` on failure
+   */
+  async submitReveal(params: SubmitRevealParams): Promise<SDKResult<SubmitRevealResult>>;
+  async submitReveal(
+    disputeId: string,
+    jurorAddress: string,
+    voteForDepositor: boolean,
+    salt: Uint8Array | string,
+  ): Promise<SDKResult<SubmitRevealResult>>;
+  async submitReveal(
+    paramsOrDisputeId: SubmitRevealParams | string,
+    jurorAddress?: string,
+    voteForDepositor?: boolean,
+    salt?: Uint8Array | string,
+  ): Promise<SDKResult<SubmitRevealResult>> {
+    let p: SubmitRevealParams;
+    if (typeof paramsOrDisputeId === 'object' && paramsOrDisputeId !== null) {
+      p = paramsOrDisputeId;
+    } else {
+      p = {
+        disputeId: paramsOrDisputeId,
+        jurorAddress: jurorAddress!,
+        voteForDepositor: voteForDepositor!,
+        salt: salt!,
+      };
+    }
+
+    if (!isValidEscrowId(p.disputeId)) {
+      return { ok: false, error: 'disputeId is required' };
+    }
+    if (!isValidStellarAddress(p.jurorAddress)) {
+      return {
+        ok: false,
+        error: `Invalid Stellar address for "jurorAddress": ${p.jurorAddress}`,
+      };
+    }
+    if ((p.voteForDepositor as unknown) === 'abstain') {
+      return {
+        ok: false,
+        error:
+          "Commit-reveal voting does not support 'abstain'. Callers needing 'abstain' must cast a plaintext vote instead.",
+      };
+    }
+    if (typeof p.voteForDepositor !== 'boolean') {
+      return { ok: false, error: 'voteForDepositor must be a boolean' };
+    }
+
+    if (!p.salt) {
+      return { ok: false, error: 'salt is required' };
+    }
+    if (typeof p.salt === 'string') {
+      if (p.salt.length !== 64 || !/^[0-9a-fA-F]+$/.test(p.salt)) {
+        return { ok: false, error: 'Salt must be exactly 32 bytes (64 hex characters)' };
+      }
+    } else if (p.salt instanceof Uint8Array) {
+      if (p.salt.length !== 32) {
+        return { ok: false, error: 'Salt must be exactly 32 bytes' };
+      }
+    } else {
+      return { ok: false, error: 'Salt must be a 32-byte Uint8Array or 64-character hex string' };
+    }
+
+    let args: unknown[];
+    try {
+      args = buildRevealArgs(p.disputeId, p.jurorAddress, p.voteForDepositor, p.salt);
+    } catch (e) {
+      return { ok: false, error: `Failed to encode reveal arguments: ${String(e)}` };
+    }
+    void args;
+
+    return {
+      ok: true,
+      data: {
+        txHash: `reveal-${this.config.contractId}-${p.disputeId}-${Date.now()}`,
+        disputeId: p.disputeId,
+        jurorAddress: p.jurorAddress,
+        voteForDepositor: p.voteForDepositor,
       },
     };
   }

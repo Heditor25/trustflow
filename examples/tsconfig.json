@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "paths": {
+      "@trustflow/sdk": ["../src/index.ts"],
+      "@trustflow/sdk/escrow": ["../src/escrow/index.ts"],
+      "@trustflow/sdk/wallet": ["../src/wallet/index.ts"],
+      "@trustflow/sdk/utils": ["../src/utils/index.ts"],
+      "@trustflow/sdk/node": ["../src/node/index.ts"],
+      "@trustflow/sdk/testing": ["../src/testing/index.ts"],
+      "@trustflow/sdk/react": ["../src/hooks/index.ts"]
+    }
+  },
+  "include": [
+    "*.ts"
+  ]
+}

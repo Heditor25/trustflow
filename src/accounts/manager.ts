@@ -51,7 +51,6 @@ export class AccountManager {
   private currentActiveId: string | null = null;
   private keypair: Keypair | null = null;
 
-
   /**
    * Returns the currently configured Keypair, or null if none is set.
    */

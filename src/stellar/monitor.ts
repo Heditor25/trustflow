@@ -1,6 +1,7 @@
 import { fetchAccountInfo, AccountInfo } from './account';
 import { StellarNetwork } from './network';
 import { logger } from '../utils/logger';
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout } from '../utils/timeout';
 
 /**
  * Configuration options for the Stellar account balance monitor.
@@ -8,7 +9,7 @@ import { logger } from '../utils/logger';
 export interface AccountMonitorConfig {
   /** The Stellar public key address (G...) to monitor. */
   address: string;
-  /** Network to query against ('TESTNET' | 'MAINNET'). Defaults to 'TESTNET'. */
+  /** Network to query against. Defaults to 'TESTNET'. */
   network?: StellarNetwork;
   /** Minimum balance threshold in XLM below which alerts are emitted. Defaults to 10 XLM. */
   minBalanceXLM?: string | number;
@@ -18,6 +19,8 @@ export interface AccountMonitorConfig {
   webhookUrl?: string;
   /** Optional HTTP headers to include with webhook POST requests (e.g. auth headers). */
   webhookHeaders?: Record<string, string>;
+  /** Timeout in milliseconds for each webhook POST. Defaults to 10,000ms. */
+  webhookTimeoutMs?: number;
   /** Optional custom account fetch function for testing or custom RPC endpoints. */
   fetchFn?: (address: string, network: StellarNetwork) => Promise<AccountInfo>;
 }
@@ -59,11 +62,14 @@ export class AccountBalanceMonitor {
   private readonly pollIntervalMs: number;
   private readonly webhookUrl?: string;
   private readonly webhookHeaders?: Record<string, string>;
+  private readonly webhookTimeoutMs: number;
   private readonly fetchFn: (address: string, network: StellarNetwork) => Promise<AccountInfo>;
 
   private timer?: ReturnType<typeof setInterval>;
   private running = false;
   private lastBalance?: string;
+  /** The balance check currently awaiting `fetchFn`, shared by overlapping callers. */
+  private pendingCheck?: Promise<BalanceUpdate | null>;
 
   private lowBalanceHandlers = new Set<AccountMonitorEventHandler<LowBalanceAlert>>();
   private updateHandlers = new Set<AccountMonitorEventHandler<BalanceUpdate>>();
@@ -82,6 +88,7 @@ export class AccountBalanceMonitor {
     this.pollIntervalMs = config.pollIntervalMs ?? 30_000;
     this.webhookUrl = config.webhookUrl;
     this.webhookHeaders = config.webhookHeaders;
+    this.webhookTimeoutMs = config.webhookTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchFn = config.fetchFn ?? fetchAccountInfo;
   }
 
@@ -145,8 +152,21 @@ export class AccountBalanceMonitor {
 
   /**
    * Immediately triggers a single balance check cycle.
+   *
+   * If a check is already in flight (a slow poll still waiting on `fetchFn`),
+   * this returns that check's result instead of starting another, so the monitor
+   * never has more than one `fetchFn` call outstanding.
    */
-  async checkNow(): Promise<BalanceUpdate | null> {
+  checkNow(): Promise<BalanceUpdate | null> {
+    if (!this.pendingCheck) {
+      this.pendingCheck = this.runCheck().finally(() => {
+        this.pendingCheck = undefined;
+      });
+    }
+    return this.pendingCheck;
+  }
+
+  private async runCheck(): Promise<BalanceUpdate | null> {
     try {
       const info = await this.fetchFn(this.address, this.network);
       const prev = this.lastBalance;
@@ -209,17 +229,22 @@ export class AccountBalanceMonitor {
   private async sendWebhook(alert: LowBalanceAlert): Promise<void> {
     try {
       if (typeof fetch !== 'undefined' && this.webhookUrl) {
-        await fetch(this.webhookUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...this.webhookHeaders,
+        await fetchWithTimeout(
+          this.webhookUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...this.webhookHeaders,
+            },
+            body: JSON.stringify({
+              event: 'account.low_balance',
+              data: alert,
+            }),
           },
-          body: JSON.stringify({
-            event: 'account.low_balance',
-            data: alert,
-          }),
-        });
+          this.webhookTimeoutMs,
+          'monitor.webhook',
+        );
       }
     } catch (webhookErr) {
       logger.error('Failed to send low balance webhook notification', { webhookErr });

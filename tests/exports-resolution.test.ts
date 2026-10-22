@@ -72,4 +72,34 @@ describe('package exports map (#100)', () => {
       }
     }
   });
+
+  describe('root exports coverage (#443, #451, #442)', () => {
+    it('exports AbstractContractClient, SignAndSubmitFn, SimulationResult from root (#443)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sdk = require('../src');
+      expect(sdk.AbstractContractClient).toBeDefined();
+      expect(sdk.generateTypeScriptBindings).toBeDefined();
+      expect(sdk.invokeContract).toBeDefined();
+      expect(sdk.simulateContractCall).toBeDefined();
+    });
+
+    it('exports FeeEstimate, FeeRange, EstimateFeeOptions from root and tx-pipeline (#451)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const pipeline = require('../src/tx-pipeline');
+      expect(pipeline.TransactionPipeline).toBeDefined();
+    });
+
+    it('generateTypeScriptBindings references symbols exported from root (#443)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { generateTypeScriptBindings } = require('../src');
+      const out = generateTypeScriptBindings([]);
+      expect(out).toContain(
+        "import { AbstractContractClient, TrustFlowClient, SignAndSubmitFn, ContractCallResult, SimulationResult } from '@trustflow/sdk';",
+      );
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sdk = require('../src');
+      expect(sdk.AbstractContractClient).toBeDefined();
+      expect(sdk.TrustFlowClient).toBeDefined();
+    });
+  });
 });

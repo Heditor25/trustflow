@@ -15,12 +15,57 @@ export function buildCreateEscrowArgs(params: CreateEscrowParams): unknown[] {
   // TrustFlowError.validation(...) instead of whatever `new Address()` throws.
   assertStellarAddress(params.sender, 'sender');
   assertStellarAddress(params.recipient, 'recipient');
-  return [
+  const args: unknown[] = [
     new Address(params.sender).toScVal(),
     new Address(params.recipient).toScVal(),
     nativeToScVal(params.amountStroops, { type: 'i128' }),
     nativeToScVal(params.durationBlocks ?? 0, { type: 'u32' }),
   ];
+
+  if (params.milestones && params.milestones.length > 0) {
+    const encodedMilestones = params.milestones.map((m) => {
+      const entry: Record<string, unknown> = {};
+      if (m.amount !== undefined) {
+        entry.amount = nativeToScVal(m.amount, { type: 'i128' });
+      }
+      const dl = m.deadline ?? m.expiration;
+      if (dl !== undefined) {
+        const sec = typeof dl === 'number' ? dl : Math.floor(new Date(dl).getTime() / 1000);
+        entry.deadline = nativeToScVal(sec, { type: 'u64' });
+      }
+      if (m.description !== undefined) {
+        entry.description = nativeToScVal(m.description, { type: 'string' });
+      }
+      return nativeToScVal(entry);
+    });
+    args.push(nativeToScVal(encodedMilestones));
+  }
+
+  return args;
+}
+
+/**
+ * Encodes cancellation arguments for an escrow.
+ *
+ * Encodes `escrowId` as a string and unreleased milestone indices as a Soroban
+ * `Vec<u32>` ScVal matching the contract's expected cancellation signature.
+ *
+ * @param escrowId - Unique identifier of the escrow to cancel
+ * @param unreleasedMilestoneIndices - Array of unreleased milestone indices (default empty)
+ * @returns Array of encoded ScVal contract call arguments
+ */
+export function buildCancelArgs(
+  escrowId: string,
+  unreleasedMilestoneIndices: number[] = [],
+): unknown[] {
+  assertEscrowId(escrowId);
+  const elements = unreleasedMilestoneIndices.map((idx) => {
+    if (!Number.isInteger(idx) || idx < 0) {
+      throw TrustFlowError.validation('milestoneIndex', 'Must be a non-negative integer');
+    }
+    return nativeToScVal(idx, { type: 'u32' });
+  });
+  return [nativeToScVal(escrowId, { type: 'string' }), nativeToScVal(elements)];
 }
 
 export function buildReleaseArgs(escrowId: string, caller: string): unknown[] {
@@ -66,9 +111,20 @@ export function buildFundArgs(
   return args;
 }
 
-export function buildDisputeArgs(escrowId: string, reason: string): unknown[] {
+export function buildDisputeArgs(
+  escrowId: string,
+  caller: string,
+  maybeReason?: string,
+): unknown[] {
   assertEscrowId(escrowId);
-  return [nativeToScVal(escrowId, { type: 'string' }), nativeToScVal(reason, { type: 'string' })];
+  if (maybeReason !== undefined) {
+    return [
+      nativeToScVal(escrowId, { type: 'string' }),
+      new Address(caller).toScVal(),
+      nativeToScVal(maybeReason, { type: 'string' }),
+    ];
+  }
+  return [nativeToScVal(escrowId, { type: 'string' }), nativeToScVal(caller, { type: 'string' })];
 }
 
 /**
@@ -92,5 +148,70 @@ export function buildVoteArgs(
     new Address(jurorAddress).toScVal(),
     nativeToScVal(vote.encrypted, { type: 'bool' }),
     voteScVal,
+  ];
+}
+
+/**
+ * Encodes a juror's vote reveal into contract call arguments.
+ *
+ * Encodes `disputeId` as a string, `jurorAddress` as an Address,
+ * `voteForDepositor` as a boolean (true for depositor, false for beneficiary),
+ * and `salt` as 32-byte ScVal bytes matching the contract's expected reveal signature.
+ *
+ * Note: commit-reveal voting does not support 'abstain'. Callers needing 'abstain'
+ * must cast a plaintext vote instead.
+ *
+ * @param disputeId - Unique identifier of the dispute
+ * @param jurorAddress - Stellar address of the revealing juror
+ * @param voteForDepositor - Boolean vote choice: true for depositor (1), false for beneficiary (0)
+ * @param salt - 32-byte secret salt used during commitment creation (Uint8Array or hex string)
+ * @returns Array of encoded ScVal contract call arguments
+ */
+export function buildRevealArgs(
+  disputeId: string,
+  jurorAddress: string,
+  voteForDepositor: boolean,
+  salt: Uint8Array | string,
+): unknown[] {
+  assertEscrowId(disputeId);
+  assertStellarAddress(jurorAddress, 'jurorAddress');
+
+  if ((voteForDepositor as unknown) === 'abstain') {
+    throw new TrustFlowError(
+      "Commit-reveal voting does not support 'abstain'. Callers needing 'abstain' must cast a plaintext vote instead.",
+      'VALIDATION_ERROR',
+    );
+  }
+
+  if (typeof voteForDepositor !== 'boolean') {
+    throw new TrustFlowError('voteForDepositor must be a boolean', 'VALIDATION_ERROR');
+  }
+
+  let saltBytes: Buffer;
+  if (typeof salt === 'string') {
+    if (salt.length !== 64 || !/^[0-9a-fA-F]+$/.test(salt)) {
+      throw new TrustFlowError(
+        'Salt hex string must be exactly 64 characters (32 bytes)',
+        'VALIDATION_ERROR',
+      );
+    }
+    saltBytes = Buffer.from(salt, 'hex');
+  } else if (salt instanceof Uint8Array) {
+    if (salt.length !== 32) {
+      throw new TrustFlowError('Salt must be exactly 32 bytes', 'VALIDATION_ERROR');
+    }
+    saltBytes = Buffer.from(salt);
+  } else {
+    throw new TrustFlowError(
+      'Salt must be a 32-byte Uint8Array or 64-character hex string',
+      'VALIDATION_ERROR',
+    );
+  }
+
+  return [
+    nativeToScVal(disputeId, { type: 'string' }),
+    new Address(jurorAddress).toScVal(),
+    nativeToScVal(voteForDepositor, { type: 'bool' }),
+    nativeToScVal(saltBytes, { type: 'bytes' }),
   ];
 }

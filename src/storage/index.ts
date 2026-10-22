@@ -1,10 +1,5 @@
 export { IPFSStorage } from './ipfs';
-export type {
-  IPFSConfig,
-  IPFSUploadOptions,
-  IPFSUploadResult,
-  IPFSResolveOptions,
-} from './ipfs';
+export type { IPFSConfig, IPFSUploadOptions, IPFSUploadResult, IPFSResolveOptions } from './ipfs';
 export {
   isValidCid,
   validateCID,

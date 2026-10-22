@@ -17,13 +17,14 @@ jobs:
   verify:
     name: Verify release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: 22.x
           cache: 'npm'
@@ -56,6 +57,7 @@ jobs:
     needs: verify
     if: github.event_name == 'push' || !inputs.dry-run
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: npm-release
     permissions:
       contents: write
@@ -63,10 +65,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: 22.x
           cache: 'npm'

@@ -55,13 +55,13 @@ describe('exported Zod schemas', () => {
   });
 
   describe('NetworkSchema', () => {
-    it.each(['MAINNET', 'TESTNET'])('accepts %s', (network) => {
+    it.each(['MAINNET', 'TESTNET', 'FUTURENET', 'LOCALNET'])('accepts %s', (network) => {
       expect(NetworkSchema.safeParse(network).success).toBe(true);
     });
 
     it('rejects an unsupported network', () => {
-      expect(NetworkSchema.safeParse('FUTURENET').success).toBe(false);
       expect(NetworkSchema.safeParse('DEVNET').success).toBe(false);
+      expect(NetworkSchema.safeParse('UNKNOWN_NET').success).toBe(false);
     });
   });
 
@@ -146,6 +146,35 @@ describe('exported Zod schemas', () => {
     it('rejects a missing contractId', () => {
       const result = ClientConfigSchema.safeParse({});
       expect(result.success).toBe(false);
+    });
+
+    it('keeps timeoutMs, retry, accounts and rpcFailover instead of stripping them (#437)', () => {
+      const account = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+      const result = ClientConfigSchema.safeParse({
+        contractId: CONTRACT_ID,
+        timeoutMs: 5000,
+        retry: { retries: 2, jitter: false },
+        accounts: [{ address: account, label: 'Alice', roles: ['depositor'] }],
+        rpcFailover: { rpcUrls: ['https://rpc.example.com'] },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.timeoutMs).toBe(5000);
+      expect(result.data.retry).toEqual({ retries: 2, jitter: false });
+      expect(result.data.accounts?.[0]).toMatchObject({ address: account, label: 'Alice' });
+      expect(result.data.rpcFailover?.rpcUrls).toEqual(['https://rpc.example.com']);
+    });
+
+    it('rejects an invalid account address and a non-positive timeoutMs (#437)', () => {
+      expect(
+        ClientConfigSchema.safeParse({
+          contractId: CONTRACT_ID,
+          accounts: [{ address: 'not-a-stellar-address' }],
+        }).success,
+      ).toBe(false);
+      expect(ClientConfigSchema.safeParse({ contractId: CONTRACT_ID, timeoutMs: 0 }).success).toBe(
+        false,
+      );
     });
   });
 });

@@ -57,12 +57,7 @@ export interface MultiSigOperation {
 }
 
 /** Parameters for initiating a new multi-sig operation */
-export interface InitMultiSigParams {
-  escrowId: EscrowId;
-  /** Ordered list of authorised signer addresses */
-  signers: StellarAddress[];
-  /** Number of signatures required (must be ≥ 1 and ≤ signers.length) */
-  threshold: number;
+export interface InitMultiSigParams extends MultiSigConfig {
   operationType: MultiSigOperationType;
   /** Base transaction XDR to be signed by `threshold` of the listed signers */
   unsignedXdr: string;

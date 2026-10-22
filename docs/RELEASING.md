@@ -17,3 +17,7 @@ Run the workflow manually (Actions, Release, Run workflow) with `dry-run` enable
 ## One-time setup
 - Create the `npm-release` environment with required reviewers.
 - Add an `NPM_TOKEN` secret to it (or configure npm trusted publishing for the package).
+
+## API Documentation Publishing
+When changes are merged into `main`, the `deploy-docs` job in `.github/workflows/ci.yml` builds the TypeDoc reference site and deploys it to GitHub Pages (`https://trustflow-protocol.github.io/trustflow-sdk/`).
+

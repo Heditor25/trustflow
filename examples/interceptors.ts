@@ -1,9 +1,8 @@
 /**
  * Example: request/response interceptors for logging, auth and transformation
  */
-import { HttpInterceptors } from '../src/utils/interceptors';
-import { ProfileClient } from '../src/profile/client';
-import { DisputeClient } from '../src/escrow/dispute';
+import { HttpInterceptors } from '@trustflow/sdk/utils';
+import { ProfileClient, DisputeClient } from '@trustflow/sdk';
 
 const interceptors = new HttpInterceptors();
 

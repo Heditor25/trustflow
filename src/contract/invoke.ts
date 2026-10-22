@@ -1,9 +1,11 @@
 import { rpc, Contract, TransactionBuilder, BASE_FEE } from '@stellar/stellar-sdk';
 import type { TrustFlowClient } from '../client';
 import type { ContractCallResult } from '../types/contract';
+import { TrustFlowError } from '../errors';
 import type { AccountOptions } from '../accounts/types';
 import { withTransientRetry } from '../utils/node-retry';
-import { logger } from '../utils/logger';
+import { padResourceFee } from '../utils/resource-fee';
+import { describeError, logger } from '../utils/logger';
 import type { ReadContractStateOptions } from './read';
 import { simulateTransaction } from './simulation';
 
@@ -23,6 +25,14 @@ export interface InvokeContractOptions extends AccountOptions {
    * {@link ClientConfig.timeoutMs}.
    */
   timeoutMs?: number;
+  /**
+   * Safety multiplier applied to the simulated `minResourceFee` before the
+   * transaction is assembled for signing, so a ledger-state change between
+   * simulation and submission does not fail with "insufficient resource fee"
+   * (#438). Defaults to `1.1`, matching `TransactionPipeline.prepare()`. Only
+   * affects the `signAndSubmit` path.
+   */
+  resourceFeeMultiplier?: number;
 }
 
 /**
@@ -47,7 +57,9 @@ export interface InvokeContractOptions extends AccountOptions {
  *
  * When the simulation fails or an exception is caught, the result includes the
  * RPC's error message in the `error` field so callers can diagnose the failure
- * without parsing logs.
+ * without parsing logs. A thrown {@link TrustFlowError} (for example `TIMEOUT`
+ * or an unregistered `options.account`, `ACCOUNT_NOT_FOUND`) also sets `code`,
+ * so callers can branch on the typed code rather than the message.
  *
  * @param client - Configured client, for the contract ID, network and retry budget
  * @param method - Contract method name
@@ -66,13 +78,18 @@ export async function invokeContract(
   signAndSubmit?: SignAndSubmitFn,
   options: InvokeContractOptions = {},
 ): Promise<ContractCallResult> {
-  client.resolveAccount(options.account);
   const server = client.getSorobanServer();
   const contract = new Contract(client.contractId);
 
-  logger.debug('Invoking contract method', { method, caller, contractId: client.contractId, argsCount: args.length });
+  logger.debug('Invoking contract method', {
+    method,
+    caller,
+    contractId: client.contractId,
+    argsCount: args.length,
+  });
 
   try {
+    client.resolveAccount(options.account);
     const account = await withTransientRetry(
       () => server.getAccount(caller),
       { ...options.retry, timeoutMs: options.timeoutMs ?? client.timeoutMs },
@@ -115,12 +132,18 @@ export async function invokeContract(
       };
     }
 
-    const prepared = rpc.assembleTransaction(tx, {
-      transactionData: simulation.transactionData ?? '',
-      events: [],
-      minResourceFee: simulation.minResourceFee ?? '0',
-      result: { retval: simulation.returnValue as any },
-    } as any).build();
+    const paddedFee = padResourceFee(simulation.minResourceFee, options.resourceFeeMultiplier);
+    // Same ordering as TransactionPipeline.prepare(): the padded fee must land
+    // in the Soroban data itself, not only in the `minResourceFee` argument.
+    simulation.transactionData?.setResourceFee(paddedFee);
+    // Assemble from the full parsed response so the simulated authorization
+    // entries (`result.auth`) are carried into the built operation (#433).
+    const prepared = rpc
+      .assembleTransaction(tx, {
+        ...simulation.response,
+        minResourceFee: paddedFee,
+      } as rpc.Api.SimulateTransactionSuccessResponse)
+      .build();
     const xdr = prepared.toXDR();
     logger.debug('Signing and submitting transaction', { method, xdrLength: xdr.length });
     const txHash = await signAndSubmit(xdr);
@@ -134,8 +157,9 @@ export async function invokeContract(
       gasUsed,
     };
   } catch (e) {
-    logger.error('Contract invocation failed', { method, caller, error: e });
+    logger.error('Contract invocation failed', { method, caller, error: describeError(e) });
     const message = e instanceof Error ? e.message : String(e);
-    return { success: false, error: message };
+    const code = e instanceof TrustFlowError ? e.code : undefined;
+    return { success: false, error: message, code };
   }
 }

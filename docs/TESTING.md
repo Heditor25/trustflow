@@ -77,3 +77,32 @@ test("encodes contract args correctly", () => {
   expect(arg).toBeValidScVal();
 });
 ```
+
+
+## Browser Automation & Wallet Rejection (Issue #478)
+
+### Simulating User Rejection
+
+`MockWalletAdapter` supports simulating user rejections matching Freighter's error behavior:
+
+```ts
+import { MockWalletAdapter } from '@trustflow/sdk/testing';
+
+const wallet = new MockWalletAdapter();
+wallet.rejectNext('User declined transaction');
+
+await expect(wallet.signTransaction(xdr)).rejects.toThrow('User declined transaction');
+```
+
+### Headless Browser Injection (Playwright & Cypress)
+
+You can inject a mock `window.freighter` provider before any page script executes in Playwright:
+
+```ts
+import { test } from '@playwright/test';
+import { createPlaywrightWalletScript } from '@trustflow/sdk/testing';
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(createPlaywrightWalletScript({ publicKey: 'G...' }));
+});
+```

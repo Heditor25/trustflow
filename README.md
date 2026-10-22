@@ -355,6 +355,10 @@ client.addSignature({ operationId, signerAddress, signedXdr });
 const reExported = client.exportState(operationId); // hand the updated state back to your store
 ```
 
+`importState` does not trust the `verified` flags in a snapshot. Every imported signature is checked
+again against the transaction, and any that fail are kept as unverified, so they do not count towards
+the threshold.
+
 `importState` overwrites any existing local operation with the same `operationId` — **last write
 wins.** If two processes both mutate after diverging from the same snapshot and both re-export,
 importing one after the other discards the first's signatures rather than merging them.
@@ -434,8 +438,7 @@ The `@trustflow/sdk/escrow`, `@trustflow/sdk/wallet`, and `@trustflow/sdk/utils`
 - **[Versioning Policy](./docs/VERSIONING.md)** — Semantic versioning, what counts as a breaking change, and the deprecation policy
 - **[Upgrading](./docs/UPGRADING.md)** — Migration steps for releases with breaking changes, and current deprecations
 - **[Examples](./examples/)** — Working code examples for common use cases
-- **API reference (generated)** — run `npm run docs` to build a browsable HTML API reference
-  from JSDoc comments into `docs/reference/` (not committed; regenerate locally or in CI)
+- **[API Reference (TypeDoc)](https://trustflow-protocol.github.io/trustflow-sdk/)** — Browsable HTML API reference generated from JSDoc comments (run `npm run docs` to regenerate locally)
 
 ---
 
@@ -452,8 +455,8 @@ The SDK is under active development. Here's what's coming:
 ### Planned Features
 - [x] Multi-signature support for corporate escrows
 - [x] IPFS storage helpers for file uploads
-- [ ] Pagination support for high-volume queries
-- [ ] Event parsing utilities for XDR decoding
+- [x] Pagination support for high-volume queries
+- [x] Event parsing utilities for XDR decoding
 - [x] Juror voting system integration
 
 See our [GitHub Issues](https://github.com/trustflow-protocol/trustflow-sdk/issues) for detailed progress tracking.
@@ -487,8 +490,8 @@ We take security seriously. This SDK builds and signs financial transactions on 
 **Report security issues privately** via [SECURITY.md](./SECURITY.md) — do not open public issues for vulnerabilities.
 
 Security features:
-- **Strict Linting**: ESLint strict mode enforced across the codebase
-- **Input Validation**: All parameters validated with Zod schemas
+- **Linting & Code Quality**: ESLint configuration enforced across the codebase in CI
+- **Input Validation**: Critical transaction parameters validated with runtime checks; Zod schemas exported for consumer validation
 - **Type Safety**: TypeScript strict mode prevents runtime errors
 - **Test Coverage**: Critical paths covered by Jest integration tests
 - **Supported versions**: See [SECURITY.md](./SECURITY.md) for versioning and expected response times

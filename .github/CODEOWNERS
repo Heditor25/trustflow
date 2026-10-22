@@ -1,76 +1,76 @@
 # CODEOWNERS — Define who should review code changes in specific areas
 
 # Default — all files require review from maintainers
-* @trustflow-protocol/maintainers
+* @meshackyaro
 
 # Core client and configuration
-/src/client.ts @trustflow-protocol/maintainers
-/src/types.ts @trustflow-protocol/maintainers
-/src/types/ @trustflow-protocol/maintainers
-/src/constants.ts @trustflow-protocol/maintainers
-/src/index.ts @trustflow-protocol/maintainers
+/src/client.ts @meshackyaro
+/src/types.ts @meshackyaro
+/src/types/ @meshackyaro
+/src/constants.ts @meshackyaro
+/src/index.ts @meshackyaro
 
 # Error handling — critical for correctness
-/src/errors.ts @trustflow-protocol/maintainers
+/src/errors.ts @meshackyaro
 
 # Escrow operations
-/src/escrow/ @trustflow-protocol/maintainers
+/src/escrow/ @meshackyaro
 
 # Authentication and session management — critical for security
-/src/auth/ @trustflow-protocol/maintainers
+/src/auth/ @meshackyaro
 
 # Wallet integration — critical for key handling
-/src/wallet/ @trustflow-protocol/maintainers
+/src/wallet/ @meshackyaro
 
 # Contract interaction and Soroban integration
-/src/contract/ @trustflow-protocol/maintainers
+/src/contract/ @meshackyaro
 
 # Transaction pipeline — critical for correctness
-/src/tx-pipeline/ @trustflow-protocol/maintainers
+/src/tx-pipeline/ @meshackyaro
 
 # Utilities
-/src/utils/ @trustflow-protocol/maintainers
+/src/utils/ @meshackyaro
 
 # Dispute resolution
-/src/juror/ @trustflow-protocol/maintainers
+/src/juror/ @meshackyaro
 
 # Profiles
-/src/profile/ @trustflow-protocol/maintainers
+/src/profile/ @meshackyaro
 
 # Storage
-/src/storage/ @trustflow-protocol/maintainers
+/src/storage/ @meshackyaro
 
 # Stellar network utilities
-/src/stellar/ @trustflow-protocol/maintainers
+/src/stellar/ @meshackyaro
 
 # React hooks
-/src/hooks/ @trustflow-protocol/maintainers
+/src/hooks/ @meshackyaro
 
 # Events
-/src/events.ts @trustflow-protocol/maintainers
+/src/events.ts @meshackyaro
 
 # Validation schemas
-/src/schemas.ts @trustflow-protocol/maintainers
+/src/schemas.ts @meshackyaro
 
 # Documentation
-/docs/ @trustflow-protocol/maintainers
-/README.md @trustflow-protocol/maintainers
-/CONTRIBUTING.md @trustflow-protocol/maintainers
-/SECURITY.md @trustflow-protocol/maintainers
+/docs/ @meshackyaro
+/README.md @meshackyaro
+/CONTRIBUTING.md @meshackyaro
+/SECURITY.md @meshackyaro
 
 # Build and configuration
-/tsup.config.ts @trustflow-protocol/maintainers
-/jest.config.js @trustflow-protocol/maintainers
-/eslint*.config.mjs @trustflow-protocol/maintainers
-/package.json @trustflow-protocol/maintainers
-/tsconfig*.json @trustflow-protocol/maintainers
-/prettier* @trustflow-protocol/maintainers
+/tsup.config.ts @meshackyaro
+/jest.config.js @meshackyaro
+/eslint*.config.mjs @meshackyaro
+/package.json @meshackyaro
+/tsconfig*.json @meshackyaro
+/prettier* @meshackyaro
 
 # GitHub configuration
-/.github/ @trustflow-protocol/maintainers
+/.github/ @meshackyaro
 
 # Changelog
-/CHANGELOG.md @trustflow-protocol/maintainers
+/CHANGELOG.md @meshackyaro
 
 # Tests — always require review
-/tests/ @trustflow-protocol/maintainers
+/tests/ @meshackyaro

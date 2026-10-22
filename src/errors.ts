@@ -13,6 +13,7 @@ export type TrustFlowErrorCode =
   | 'MULTISIG_ERROR'
   | 'MULTISIG_THRESHOLD_NOT_MET'
   | 'MULTISIG_ALREADY_SIGNED'
+  | 'DUPLICATE_SIGNER'
   | 'MULTISIG_EXPIRED'
   | 'MULTISIG_INVALID_SIGNER'
   | 'MULTISIG_XDR_ERROR'
@@ -23,7 +24,6 @@ export type TrustFlowErrorCode =
   | 'NETWORK_ERROR'
   | 'AUTH_ERROR'
   | 'TIMEOUT'
-  | 'INVALID_CONTRACT_CALL'
   | 'CIRCUIT_BREAKER_OPEN'
   | 'ACCOUNT_NOT_FOUND'
   | 'UNSUPPORTED_ENVIRONMENT'
@@ -31,7 +31,9 @@ export type TrustFlowErrorCode =
   | 'USER_REJECTED'
   | 'STALE_CHALLENGE'
   | 'STORAGE_GATEWAY_ERROR'
-  | 'INVALID_EXPIRATION';
+  | 'INVALID_EXPIRATION'
+  | 'ENCRYPTION_ERROR'
+  | 'DECRYPTION_ERROR';
 
 export class TrustFlowError extends Error {
   readonly code: TrustFlowErrorCode;
@@ -107,6 +109,17 @@ export class TrustFlowError extends Error {
     return new TrustFlowError(`Multi-sig operation ${operationId} has expired`, 'MULTISIG_EXPIRED');
   }
 
+  static multiSigAlreadySigned(address: string): TrustFlowError {
+    return new TrustFlowError(
+      `${address} has already signed this operation`,
+      'MULTISIG_ALREADY_SIGNED',
+    );
+  }
+
+  static duplicateSigner(address: string): TrustFlowError {
+    return new TrustFlowError(`${address} has already signed this operation`, 'DUPLICATE_SIGNER');
+  }
+
   static multiSigInvalidSigner(address: string): TrustFlowError {
     return new TrustFlowError(
       `${address} is not an authorised signer for this operation`,
@@ -159,10 +172,7 @@ export class TrustFlowError extends Error {
    */
   static timedOut(timeoutMs: number, context?: string): TrustFlowError {
     const where = context ? ` (${context})` : '';
-    return new TrustFlowError(
-      `Timed out after ${timeoutMs}ms${where}`,
-      'TIMEOUT',
-    );
+    return new TrustFlowError(`Timed out after ${timeoutMs}ms${where}`, 'TIMEOUT');
   }
 
   static retryExhausted(stage: string, attempts: number, cause?: unknown): TrustFlowError {
@@ -193,7 +203,9 @@ export class TrustFlowError extends Error {
   }
 
   static invalidExpiration(detail: string, field?: string, cause?: unknown): TrustFlowError {
-    const message = detail.startsWith('Invalid expiration') ? detail : `Invalid expiration: ${detail}`;
+    const message = detail.startsWith('Invalid expiration')
+      ? detail
+      : `Invalid expiration: ${detail}`;
     return new TrustFlowError(message, 'INVALID_EXPIRATION', cause, field);
   }
 }

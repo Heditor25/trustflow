@@ -134,7 +134,10 @@ export class SorobanContractClient extends AbstractContractClient {
     const operation = contract.call(methodName, ...(scVals as any[]));
 
     // Use a dummy account for simulation, matching readContractState
-    const dummyAccount = new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0');
+    const dummyAccount = new Account(
+      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      '0',
+    );
 
     const tx = new TransactionBuilder(dummyAccount, {
       fee: BASE_FEE,

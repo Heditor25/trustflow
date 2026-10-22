@@ -1,3 +1,4 @@
+import { destroyAllPoolAgents } from './utils/connection-pool';
 import { negotiateApiVersion } from './utils/version';
 import { Config, Horizon, rpc, xdr } from '@stellar/stellar-sdk';
 import {
@@ -17,6 +18,7 @@ import { AccountManager } from './accounts/manager';
 import type { AccountContext, AccountOptions, AddAccountInput } from './accounts/types';
 import { assertStellarAddress } from './utils/validation';
 import { fetchAccountInfo, type AccountInfo } from './stellar/account';
+import { NETWORK_CONFIGS } from './stellar/network';
 import { withTransientRetry } from './utils/node-retry';
 import {
   assertWebCryptoSupport,
@@ -43,6 +45,12 @@ export interface MultiAccountConfig {
   /** Accounts to register up front. The first becomes active. */
   accounts: AddAccountInput[];
 }
+
+/**
+ * Custom RPC headers per client. Kept outside the instance's own properties so
+ * `console.log`, `util.inspect` and `JSON.stringify` never print their values (#344).
+ */
+const rpcHeadersByClient = new WeakMap<TrustFlowClient, Record<string, string>>();
 
 /**
  * TrustFlowClient is the main entry point for interacting with the TrustFlow Protocol.
@@ -85,11 +93,23 @@ export class TrustFlowClient {
   private _connected: boolean = false;
   private readonly logger: SDKLogger;
 
-  readonly network: Network;
+  private _network!: Network;
+  get network(): Network {
+    return this._network;
+  }
   readonly contractId: string;
-  readonly rpcUrl: string;
-  readonly horizonUrl: string;
-  readonly networkPassphrase: string;
+  private _rpcUrl!: string;
+  get rpcUrl(): string {
+    return this._rpcUrl;
+  }
+  private _horizonUrl!: string;
+  get horizonUrl(): string {
+    return this._horizonUrl;
+  }
+  private _networkPassphrase!: string;
+  get networkPassphrase(): string {
+    return this._networkPassphrase;
+  }
   readonly apiBaseUrl?: string;
   readonly apiKey?: string;
   readonly version: string = SDK_VERSION;
@@ -114,7 +134,7 @@ export class TrustFlowClient {
    *
    * @param config - Client configuration options
    * @param config.contractId - The Soroban contract ID for TrustFlow escrow
-   * @param config.network - Network type ('TESTNET' or 'MAINNET'), defaults to TESTNET
+   * @param config.network - Target network, defaults to TESTNET
    * @param config.rpcUrl - Optional custom Soroban RPC URL
    * @param config.apiBaseUrl - Optional TrustFlow API base URL for backend integration
    * @param config.apiKey - Optional API key for authenticated requests
@@ -159,22 +179,31 @@ export class TrustFlowClient {
       }
     }
 
-    this.network = config.network ?? DEFAULT_NETWORK;
+    this._network = config.network ?? DEFAULT_NETWORK;
+    if (!NETWORK_CONFIGS[this._network]) {
+      throw new TrustFlowError(`Unsupported network: ${String(this._network)}`, 'INVALID_CONFIG');
+    }
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? SOROBAN_RPC_URLS[this.network];
-    this.horizonUrl = config.horizonUrl ?? HORIZON_URLS[this.network];
-    this.networkPassphrase = config.networkPassphrase ?? NETWORK_PASSPHRASES[this.network];
+    this._rpcUrl = config.rpcUrl ?? SOROBAN_RPC_URLS[this.network];
+    this._horizonUrl = config.horizonUrl ?? HORIZON_URLS[this.network];
+    this._networkPassphrase = config.networkPassphrase ?? NETWORK_PASSPHRASES[this.network];
+    if (typeof this._networkPassphrase !== 'string' || !this._networkPassphrase.trim()) {
+      throw new TrustFlowError('networkPassphrase must not be empty', 'INVALID_CONFIG');
+    }
     this.apiBaseUrl = config.apiBaseUrl;
     this.apiKey = config.apiKey;
     this.apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
     this.timeoutMs = config.timeoutMs;
+    rpcHeadersByClient.set(this, { ...config.rpcHeaders });
     this.retryConfig = config.ipfs ? { ...config.retry, ...config.ipfs.retry } : config.retry;
     this.storage = new IPFSStorage(config.ipfs);
     this.balanceCache = config.balanceCache
       ? new SimpleCache(config.balanceCache.ttlMs ?? DEFAULT_BALANCE_CACHE_TTL_MS)
       : undefined;
 
-    this.server = config.horizonServer ?? new Horizon.Server(this.horizonUrl);
+    this.server =
+      config.horizonServer ??
+      new Horizon.Server(this.horizonUrl, { allowHttp: this.horizonUrl.startsWith('http://') });
     this.sorobanServer = config.rpcServer;
     this.logger = logger;
     this.accounts = new AccountManager();
@@ -379,7 +408,10 @@ export class TrustFlowClient {
    * ```
    */
   async connect(): Promise<void> {
-    this.logger.debug('Connecting to Stellar network', { network: this.network, rpcUrl: this.rpcUrl });
+    this.logger.debug('Connecting to Stellar network', {
+      network: this.network,
+      rpcUrl: this.rpcUrl,
+    });
     try {
       // Test connection by fetching ledger info
       await withTransientRetry(
@@ -388,6 +420,15 @@ export class TrustFlowClient {
         this.retryConfig,
         'horizon.ledgers',
       );
+      const health = await withTransientRetry(
+        () => this.getSorobanServer().getHealth(),
+        { timeoutMs: this.timeoutMs },
+        this.retryConfig,
+        'soroban.health',
+      );
+      if (health.status !== 'healthy') {
+        throw new Error(`Soroban RPC is not healthy: ${health.status}`);
+      }
       this._connected = true;
       this.logger.info('Connected to Stellar network', { network: this.network });
     } catch (error) {
@@ -409,7 +450,28 @@ export class TrustFlowClient {
     return this._connected;
   }
 
-  async verifyApiCompatibility(): Promise<{ compatible: boolean; serverVersion: string; clientVersion: string }> {
+  /** Switches this client to a preset network and invalidates its connections. */
+  switchNetwork(network: Network): void {
+    const config = NETWORK_CONFIGS[network];
+    if (!config) {
+      throw new TrustFlowError(`Unsupported network: ${String(network)}`, 'INVALID_CONFIG');
+    }
+    this._network = network;
+    this._rpcUrl = config.rpcUrl;
+    this._horizonUrl = config.horizonUrl;
+    this._networkPassphrase = config.passphrase;
+    this.server = new Horizon.Server(this.horizonUrl, {
+      allowHttp: this.horizonUrl.startsWith('http://'),
+    });
+    this.sorobanServer = undefined;
+    this._connected = false;
+  }
+
+  async verifyApiCompatibility(): Promise<{
+    compatible: boolean;
+    serverVersion: string;
+    clientVersion: string;
+  }> {
     if (!this.apiBaseUrl) {
       return { compatible: true, serverVersion: 'N/A', clientVersion: this.apiVersion };
     }
@@ -501,7 +563,14 @@ export class TrustFlowClient {
     const account = this.accounts.require(options.account);
     try {
       return await withTransientRetry(
-        () => fetchAccountInfo(account.address, this.network, this.retryConfig, this.horizonUrl, this.timeoutMs),
+        () =>
+          fetchAccountInfo(
+            account.address,
+            this.network,
+            this.retryConfig,
+            this.horizonUrl,
+            this.timeoutMs,
+          ),
         undefined,
         this.retryConfig,
         'horizon.accountInfo',
@@ -604,8 +673,22 @@ export class TrustFlowClient {
    * ```
    */
   getSorobanServer(): rpc.Server {
-    this.sorobanServer ??= new rpc.Server(this.rpcUrl, { allowHttp: Config.isAllowHttp() });
+    this.sorobanServer ??= new rpc.Server(this.rpcUrl, {
+      allowHttp: Config.isAllowHttp() || this.rpcUrl.startsWith('http://'),
+      headers: this.getRpcHeaders(),
+    });
     return this.sorobanServer;
+  }
+
+  /**
+   * Gets the HTTP headers sent with every Soroban RPC request: the configured
+   * {@link ClientConfig.rpcHeaders} plus `Content-Type: application/json`,
+   * which always wins so a custom header cannot drop the JSON-RPC content type.
+   *
+   * @returns A fresh copy, so callers cannot mutate the client's headers
+   */
+  getRpcHeaders(): Record<string, string> {
+    return { ...rpcHeadersByClient.get(this), 'Content-Type': 'application/json' };
   }
 
   /**
@@ -720,5 +803,13 @@ export class TrustFlowClient {
   private balanceCacheKey(address: string, account?: string): string {
     const context = this.resolveAccount(account);
     return context ? `${context.id}:${address}` : address;
+  }
+
+  /**
+   * Disconnects the client, closing all pooled HTTP/HTTPS sockets and clearing caches (Issue #359).
+   */
+  async disconnect(): Promise<void> {
+    this._connected = false;
+    destroyAllPoolAgents();
   }
 }

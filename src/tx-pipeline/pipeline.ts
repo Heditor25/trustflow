@@ -10,6 +10,7 @@ import type { TrustFlowClient } from '../client';
 import type { AccountContext } from '../accounts/types';
 import { TrustFlowError } from '../errors';
 import { retry } from '../utils/retry';
+import { DEFAULT_RESOURCE_FEE_MULTIPLIER, padResourceFee } from '../utils/resource-fee';
 import { classifyFailure, markTransient } from '../utils/transient';
 import { withTimeout } from '../utils/timeout';
 import { queueDepth, queueKey, runExclusive } from './queue';
@@ -29,7 +30,6 @@ import type {
   SubmittableTransaction,
 } from './types';
 import { logger } from '../utils/logger';
-import { installTraceContextInterceptor, withSdkSpan } from '../utils/tracing';
 
 const DEFAULT_RETRY_POLICY: Required<Omit<RetryPolicy, 'timeoutMs'>> = {
   maxAttempts: 3,
@@ -37,7 +37,6 @@ const DEFAULT_RETRY_POLICY: Required<Omit<RetryPolicy, 'timeoutMs'>> = {
   maxDelayMs: 5000,
 };
 
-const DEFAULT_RESOURCE_FEE_MULTIPLIER = 1.1;
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 const DEFAULT_POLL_ATTEMPTS = 10;
 
@@ -236,7 +235,10 @@ export class TransactionPipeline {
     // constructor option, so request timeouts are enforced one layer up —
     // every stage's RPC calls are bounded by `withTimeout` in `withRetry`,
     // defaulting to the client-wide `ClientConfig.timeoutMs`.
-    this.server = new rpc.Server(client.rpcUrl, { allowHttp: Config.isAllowHttp() });
+    this.server = new rpc.Server(client.rpcUrl, {
+      allowHttp: Config.isAllowHttp(),
+      headers: client.getRpcHeaders(),
+    });
   }
 
   /**
@@ -297,7 +299,10 @@ export class TransactionPipeline {
       this.pipelineLogger.debug('Transaction assembled', { sourceAccount: params.sourceAccount });
       return ok(builder.build());
     } catch (e) {
-      this.pipelineLogger.error('Transaction assembly failed', { sourceAccount: params.sourceAccount, error: e });
+      this.pipelineLogger.error('Transaction assembly failed', {
+        sourceAccount: params.sourceAccount,
+        error: e,
+      });
       return fail(
         TrustFlowError.assemblyFailed(
           `could not assemble transaction for ${params.sourceAccount}`,
@@ -322,47 +327,6 @@ export class TransactionPipeline {
     tx: Transaction,
     options?: RetryPolicy,
   ): Promise<PipelineResult<rpc.Api.SimulateTransactionResponse>> {
-    return withSdkSpan(
-      this.client.getTracer(),
-      'trustflow.tx.simulate',
-      {
-        'rpc.system': 'stellar',
-        'rpc.method': 'simulateTransaction',
-        'stellar.network': this.client.network,
-      },
-      async (span) => {
-        span.setAttribute('transaction.hash', tx.hash().toString('hex'));
-        const response = await withRetry(
-          () => this.server.simulateTransaction(tx),
-          options,
-          'simulate',
-          this.client.timeoutMs,
-        );
-        if (!response.ok) {
-          if (response.error.code === 'RETRY_EXHAUSTED') {
-            return fail(
-              TrustFlowError.simulationFailed(
-                'simulateTransaction request failed',
-                response.error.cause,
-              ),
-            );
-          }
-          return fail(response.error);
-        }
-        if (rpc.Api.isSimulationError(response.data)) {
-          return fail(TrustFlowError.simulationFailed(response.data.error));
-        }
-        if (rpc.Api.isSimulationRestore(response.data)) {
-          return fail(
-            TrustFlowError.simulationFailed(
-              'simulation requires restore preamble',
-              response.data.restorePreamble,
-            ),
-          );
-        }
-        return ok(response.data);
-      },
-    );
     const outcome = await withRetry(
       () => this.server.simulateTransaction(tx),
       options,
@@ -408,10 +372,7 @@ export class TransactionPipeline {
       return fail(TrustFlowError.simulationFailed(simData.error));
     }
 
-    const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
-    const multiplierBps = BigInt(Math.round(multiplier * 10000));
-    const minResourceFeeBig = BigInt(simData.minResourceFee || '0');
-    const resourceFee = ((minResourceFeeBig * multiplierBps + 9999n) / 10000n).toString();
+    const resourceFee = padResourceFee(simData.minResourceFee, options?.resourceFeeMultiplier);
 
     let minInclusionFee = BigInt(tx.fee || BASE_FEE);
     if (minInclusionFee <= 0n) {
@@ -452,44 +413,7 @@ export class TransactionPipeline {
    * @param options - Resource fee multiplier and retry policy
    */
   async prepare(tx: Transaction, options?: PrepareOptions): Promise<PipelineResult<Transaction>> {
-    return withSdkSpan(
-      this.client.getTracer(),
-      'trustflow.tx.prepare',
-      {
-        'rpc.system': 'stellar',
-        'rpc.method': 'simulateTransaction',
-        'stellar.network': this.client.network,
-      },
-      async (span) => {
-        const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
-        span.setAttribute('transaction.fee_multiplier', multiplier);
-        return withRetry(
-          async () => {
-            const simulation = await this.server.simulateTransaction(tx);
-            if (rpc.Api.isSimulationError(simulation)) {
-              throw TrustFlowError.simulationFailed(simulation.error);
-            }
-            if (rpc.Api.isSimulationRestore(simulation)) {
-              throw TrustFlowError.simulationFailed(
-                'simulation requires restore preamble',
-                simulation.restorePreamble,
-              );
-            }
-
-            const paddedFee = Math.ceil(Number(simulation.minResourceFee) * multiplier).toString();
-            simulation.transactionData.setResourceFee(paddedFee);
-            this.pipelineLogger.debug('Transaction prepared', {
-              paddedFee,
-              minResourceFee: simulation.minResourceFee,
-            });
-            return rpc.assembleTransaction(tx, { ...simulation, minResourceFee: paddedFee }).build();
-          },
-          options,
-          'prepare',
-          this.client.timeoutMs,
-        );
     const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
-
     this.pipelineLogger.debug('Preparing transaction', { resourceFeeMultiplier: multiplier });
     return withRetry(
       async () => {
@@ -504,10 +428,12 @@ export class TransactionPipeline {
           );
         }
 
-        const paddedFee = Math.ceil(Number(simulation.minResourceFee) * multiplier).toString();
+        const paddedFee = padResourceFee(simulation.minResourceFee, multiplier);
         simulation.transactionData.setResourceFee(paddedFee);
-        this.pipelineLogger.debug('Transaction prepared', { paddedFee, minResourceFee: simulation.minResourceFee });
-
+        this.pipelineLogger.debug('Transaction prepared', {
+          paddedFee,
+          minResourceFee: simulation.minResourceFee,
+        });
         return rpc.assembleTransaction(tx, { ...simulation, minResourceFee: paddedFee }).build();
       },
       options,
@@ -648,9 +574,12 @@ export class TransactionPipeline {
           return result;
         }
       } catch (e) {
-        this.pipelineLogger.warn('Automatic fee bump failed; returning the latest submission result', {
-          error: e,
-        });
+        this.pipelineLogger.warn(
+          'Automatic fee bump failed; returning the latest submission result',
+          {
+            error: e,
+          },
+        );
         return result;
       }
     }
@@ -672,60 +601,15 @@ export class TransactionPipeline {
     tx: SubmittableTransaction,
     options?: SubmitOptions,
   ): Promise<PipelineResult<PipelineSubmission>> {
-    return withSdkSpan(
-      this.client.getTracer(),
-      'trustflow.tx.submit',
-      {
-        'rpc.system': 'stellar',
-        'rpc.method': 'sendTransaction',
-        'stellar.network': this.client.network,
-      },
-      async (span) => {
-        span.setAttribute('transaction.hash', tx.hash().toString('hex'));
-        span.setAttribute('stellar.fee_bump', tx instanceof FeeBumpTransaction);
-        this.pipelineLogger.debug('Submitting transaction', {
-          isFeeBump: tx instanceof FeeBumpTransaction,
-        });
-        return withRetry(
-          async (attempt) => {
-            this.pipelineLogger.debug('Sending transaction to network', {
-              attempt,
-              hash: tx.hash().toString('hex'),
-            });
-            const sendResult = await this.server.sendTransaction(tx);
-            span.setAttribute('transaction.hash', sendResult.hash);
-
-            if (sendResult.status === 'ERROR') {
-              // Terminal: the node evaluated and rejected this envelope.
-              throw TrustFlowError.submissionFailed(
-                `node rejected transaction (${sendResult.hash})`,
-                sendResult.errorResult,
-              );
-            }
-            if (sendResult.status === 'TRY_AGAIN_LATER') {
-              // The node explicitly deferred: nothing was broadcast, so a replay
-              // is safe and expected.
-              throw markTransient(TrustFlowError.submissionFailed('node reported TRY_AGAIN_LATER'));
-            }
-
-            const ledger = await this.pollForConfirmation(sendResult.hash, options);
-
-            return {
-              hash: sendResult.hash,
-              ledger,
-              feeBumped: tx instanceof FeeBumpTransaction,
-              attempts: attempt,
-              feeCharged: tx.fee,
-            };
-          },
-          options,
-          'submit',
-          this.client.timeoutMs,
-        );
-    this.pipelineLogger.debug('Submitting transaction', { isFeeBump: tx instanceof FeeBumpTransaction });
+    this.pipelineLogger.debug('Submitting transaction', {
+      isFeeBump: tx instanceof FeeBumpTransaction,
+    });
     return withRetry(
       async (attempt) => {
-        this.pipelineLogger.debug('Sending transaction to network', { attempt, hash: tx.hash?.toString() });
+        this.pipelineLogger.debug('Sending transaction to network', {
+          attempt,
+          hash: tx.hash?.toString(),
+        });
         const sendResult = await this.server.sendTransaction(tx);
 
         if (sendResult.status === 'ERROR') {
@@ -790,7 +674,9 @@ export class TransactionPipeline {
       // Only the queue wait raises a TrustFlowError here; `execute` reports
       // expected failures through its result, so anything else is unexpected.
       if (e instanceof TrustFlowError && e.code === 'TIMEOUT') {
-        this.pipelineLogger.error('Pipeline queue timeout', { sourceAccount: params.sourceAccount });
+        this.pipelineLogger.error('Pipeline queue timeout', {
+          sourceAccount: params.sourceAccount,
+        });
         return fail(e);
       }
       throw e;
@@ -823,7 +709,10 @@ export class TransactionPipeline {
 
     const submitted = await this.submit(prepared.data, params.submit);
     if (submitted.ok) {
-      this.pipelineLogger.info('Transaction confirmed', { hash: submitted.data.hash, ledger: submitted.data.ledger });
+      this.pipelineLogger.info('Transaction confirmed', {
+        hash: submitted.data.hash,
+        ledger: submitted.data.ledger,
+      });
       return submitted;
     }
 
@@ -834,7 +723,35 @@ export class TransactionPipeline {
       return submitted;
     }
 
+    // Reload account sequence before building fee-bump to prevent collision if original was confirmed
     this.pipelineLogger.info('Attempting fee-bump retry', { feeSource: feeBumpOptions.feeSource });
+    const reloaded = await withRetry(
+      () => this.server.getAccount(params.sourceAccount),
+      params.prepare,
+      'assemble',
+      this.client.timeoutMs,
+    );
+    if (reloaded.ok) {
+      // If we successfully reloaded, use the fresh sequence for the fee-bump's inner transaction.
+      // The original transaction's absolute timebounds cannot be reused here — `setTimeout`
+      // takes relative seconds — so the rebuilt retry envelope gets a fresh 30s window.
+      const freshTx = new TransactionBuilder(reloaded.data, {
+        fee: prepared.data.fee,
+        networkPassphrase: this.client.getNetworkPassphrase(),
+      }).setTimeout(30);
+
+      // `prepared.data.operations` are parsed operation objects, but
+      // `TransactionBuilder.addOperation` (stellar-base v13+) takes raw
+      // `xdr.Operation`s — re-add those straight from the original envelope.
+      for (const op of prepared.data.toEnvelope().v1().tx().operations()) {
+        freshTx.addOperation(op);
+      }
+      if (prepared.data.memo) {
+        freshTx.addMemo(prepared.data.memo);
+      }
+      prepared.data = freshTx.build();
+    }
+
     const feeBumped = this.buildFeeBump(prepared.data, feeBumpOptions);
     if (!feeBumped.ok) {
       // The escalation is a recovery attempt: if the fee-bump envelope cannot
@@ -864,7 +781,9 @@ export class TransactionPipeline {
       return escalatedSubmission;
     }
 
-    this.pipelineLogger.info('Fee-bump transaction confirmed', { hash: escalatedSubmission.data.hash });
+    this.pipelineLogger.info('Fee-bump transaction confirmed', {
+      hash: escalatedSubmission.data.hash,
+    });
     return ok({ ...escalatedSubmission.data, feeBumped: true });
   }
 

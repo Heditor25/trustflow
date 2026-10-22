@@ -135,6 +135,23 @@ describe('Timezone and UTC deadline handling - Issue #358', () => {
         expect(err.message).toMatch(/chronological/i);
       }
     });
+
+    it('returns UTC epoch seconds for a single expiration (scalar overload)', () => {
+      const future = new Date(Date.now() + 100000);
+      const seconds: number = normalizeMilestoneExpiration(future);
+      expect(seconds).toBe(Math.floor(future.getTime() / 1000));
+    });
+
+    it('keeps the other fields of each milestone while typing deadline as a number (array overload)', () => {
+      const future = new Date(Date.now() + 100000);
+      const milestones = [{ id: 'm1', deadline: future, amountStroops: 1000000n }];
+
+      const normalized: Array<{ id: string; amountStroops: bigint; deadline: number }> =
+        normalizeMilestoneExpiration(milestones);
+      expect(normalized[0].id).toBe('m1');
+      expect(normalized[0].amountStroops).toBe(1000000n);
+      expect(normalized[0].deadline).toBe(Math.floor(future.getTime() / 1000));
+    });
   });
 
   describe('createEscrow integration with deadline normalization', () => {

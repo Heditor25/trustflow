@@ -1,8 +1,10 @@
 import type { HttpInterceptors } from '../utils/interceptors';
+import type { StellarNetwork } from '../stellar/network';
+import type { TrustFlowErrorCode } from '../errors';
 
 export interface ContractConfig {
   contractId: string;
-  network: 'TESTNET' | 'MAINNET';
+  network: StellarNetwork;
   rpcUrl: string;
   networkPassphrase: string;
   apiBaseUrl?: string;
@@ -31,4 +33,10 @@ export interface ContractCallResult {
   gasUsed?: number;
   /** Error message when `success` is false, describing why the call failed. */
   error?: string;
+  /**
+   * The SDK error code (e.g. `TIMEOUT`, `ACCOUNT_NOT_FOUND`) when `success` is
+   * false because a `TrustFlowError` was thrown. Branch on this rather than
+   * parsing `error`. Distinct from the numeric contract-level `errorCode`.
+   */
+  code?: TrustFlowErrorCode;
 }

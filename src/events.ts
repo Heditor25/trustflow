@@ -56,8 +56,10 @@ export interface DisputeRaisedData {
   reason: string;
 }
 
-export interface ParsedEvent<TType extends string = string, TData = Record<string, unknown>>
-  extends ParsedEventBase {
+export interface ParsedEvent<
+  TType extends string = string,
+  TData = Record<string, unknown>,
+> extends ParsedEventBase {
   type: TType;
   data: TData;
 }
@@ -118,10 +120,7 @@ function toBigIntSafe(val: unknown): bigint | null {
 }
 
 /** Check if a raw event belongs to the TrustFlow contract */
-export function isTrustFlowEvent(
-  event: RawContractEvent,
-  contractId: string,
-): boolean {
+export function isTrustFlowEvent(event: RawContractEvent, contractId: string): boolean {
   return event.contractId === contractId && event.type === 'contract';
 }
 
@@ -301,9 +300,7 @@ export interface ContractEventsPage {
 }
 
 export interface GetEventsRpc {
-  getEvents(
-    request: Record<string, unknown>,
-  ): Promise<{
+  getEvents(request: Record<string, unknown>): Promise<{
     events?: Array<Record<string, unknown>>;
     latestLedger?: number;
     cursor?: string;
@@ -323,7 +320,8 @@ export async function fetchContractEvents(
   const response = await server.getEvents(request);
   const rawEvents = (response.events ?? []) as unknown as RawContractEvent[];
   const nextCursor =
-    response.cursor ?? (rawEvents.length > 0 ? rawEvents[rawEvents.length - 1].pagingToken : cursor);
+    response.cursor ??
+    (rawEvents.length > 0 ? rawEvents[rawEvents.length - 1].pagingToken : cursor);
   return { events: rawEvents, nextCursor, latestLedger: response.latestLedger };
 }
 

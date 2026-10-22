@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useWallet, useEscrow, useBalance } from 'trustflow-sdk';
+import { useWallet, useEscrow, useBalance } from '@trustflow/sdk/react';
 import './App.css';
 
 function App() {

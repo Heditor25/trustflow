@@ -14,6 +14,7 @@ import { submitTransaction } from '../src/stellar/transaction';
 import type {
   AddSignatureParams,
   InitMultiSigParams,
+  MultiSigConfig,
   MultiSigStatus,
   MultiSigStateSnapshot,
 } from '../src/types/multisig';
@@ -887,6 +888,63 @@ describe('MultiSigEscrowClient against the real client', () => {
       expect(statusOf(client.getMultiSigStatus(operationId)).threshold).toBe(1);
     });
 
+    it('downgrades an imported entry marked verified whose signature does not check out (#434)', async () => {
+      const source = makeClient();
+      const operationId = initOperation(source, { threshold: 1 });
+      const snapshot = source.exportState(operationId) as MultiSigStateSnapshot;
+      // Signed by `b`, but recorded as a verified signature from `a`.
+      snapshot.collectedSignatures = [
+        {
+          signerAddress: signers.a.publicKey(),
+          signedXdr: signedXdrFor(signers.b),
+          addedAt: Date.now(),
+          verified: true,
+          verifiedAt: Date.now(),
+        },
+      ];
+
+      const target = makeClient();
+      expect(target.importState(snapshot)).toEqual({ ok: true, data: { operationId } });
+      expect(statusOf(target.getMultiSigStatus(operationId))).toMatchObject({
+        signaturesCollected: 0,
+        isReady: false,
+        status: 'pending',
+      });
+      await expect(target.submitWhenReady(operationId, HORIZON_URL)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('Threshold not met'),
+      });
+    });
+
+    it('rejects a snapshot with a signer that is not a Stellar address (#434)', () => {
+      const client = makeClient();
+      const operationId = initOperation(client);
+      const snapshot = client.exportState(operationId) as MultiSigStateSnapshot;
+      snapshot.signers = [signers.a.publicKey(), 'not-an-address'];
+
+      expect(client.importState(snapshot)).toEqual({
+        ok: false,
+        error: 'snapshot.signers[1] is not a valid Stellar address',
+      });
+    });
+
+    it('rejects a collected signature entry that is missing its signedXdr (#434)', () => {
+      const client = makeClient();
+      const operationId = initOperation(client);
+      const snapshot = client.exportState(operationId) as MultiSigStateSnapshot;
+      snapshot.collectedSignatures = [
+        {
+          signerAddress: signers.a.publicKey(),
+          addedAt: Date.now(),
+        } as unknown as MultiSigStateSnapshot['collectedSignatures'][number],
+      ];
+
+      expect(client.importState(snapshot)).toEqual({
+        ok: false,
+        error: 'snapshot.collectedSignatures[0] must have signerAddress, signedXdr and addedAt',
+      });
+    });
+
     it.each([
       ['not an object', 'snapshot must be an object'],
       ['wrong version', 'snapshot.version 2 is not supported by this SDK (expected 1)'],
@@ -925,6 +983,45 @@ describe('MultiSigEscrowClient against the real client', () => {
         ok: false,
         error,
       });
+    });
+  });
+
+  describe('MultiSigConfig integration (#442)', () => {
+    it('provides MultiSigConfig through client.getConfig(operationId)', () => {
+      const client = makeClient();
+      const operationId = initOperation(client);
+
+      const config: MultiSigConfig | undefined = client.getConfig(operationId);
+      expect(config).toBeDefined();
+      expect(config?.escrowId).toBe(ESCROW_ID);
+      expect(config?.threshold).toBe(2);
+      expect(config?.signers).toEqual(SIGNER_ADDRESSES);
+    });
+
+    it('returns undefined from getConfig for unknown operationId', () => {
+      const client = makeClient();
+      expect(client.getConfig('unknown-id')).toBeUndefined();
+    });
+
+    it('accepts MultiSigConfig as part of InitMultiSigParams', () => {
+      const client = makeClient();
+      const baseConfig: MultiSigConfig = {
+        escrowId: ESCROW_ID,
+        threshold: 2,
+        signers: SIGNER_ADDRESSES,
+      };
+      const params: InitMultiSigParams = {
+        ...baseConfig,
+        operationType: 'release',
+        unsignedXdr: baseTransaction().build().toXDR(),
+        networkPassphrase: NETWORK,
+      };
+
+      const res = client.initMultiSigOperation(params);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(client.getConfig(res.data.operationId)).toEqual(baseConfig);
+      }
     });
   });
 });

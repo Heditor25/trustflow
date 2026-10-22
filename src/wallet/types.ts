@@ -36,10 +36,10 @@ export function isWalletRejection(error: unknown): boolean {
     error instanceof Error
       ? error.message
       : typeof error === 'string'
-      ? error
-      : typeof error === 'object' && error !== null && 'message' in error
-      ? String((error as any).message)
-      : '';
+        ? error
+        : typeof error === 'object' && error !== null && 'message' in error
+          ? String((error as any).message)
+          : '';
 
   const lower = msg.toLowerCase();
   return (

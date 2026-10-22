@@ -240,6 +240,37 @@ describe('MultiSigEscrowClient signature verification', () => {
         expect(result.error).toContain('invalid');
       }
     });
+
+    it('rejects duplicate signature from the same signer and does not count towards threshold', () => {
+      const signedXdrA = signTx(unsignedXdr, signerA);
+      const firstResult = client.addSignature({
+        operationId,
+        signerAddress: signerA.publicKey(),
+        signedXdr: signedXdrA,
+      });
+      expect(firstResult.ok).toBe(true);
+
+      const duplicateResult = client.addSignature({
+        operationId,
+        signerAddress: signerA.publicKey(),
+        signedXdr: signedXdrA,
+      });
+
+      expect(duplicateResult.ok).toBe(false);
+      if (!duplicateResult.ok) {
+        expect(duplicateResult.error).toContain('has already signed this operation');
+      }
+
+      // Threshold is 2: only 1 distinct signature should be counted, operation should not be ready
+      const status = client.getMultiSigStatus(operationId);
+      expect(status.ok).toBe(true);
+      if (status.ok) {
+        expect(status.data.signaturesCollected).toBe(1);
+        expect(status.data.isReady).toBe(false);
+        expect(status.data.signersSigned).toEqual([signerA.publicKey()]);
+        expect(status.data.signersRemaining).toEqual([signerB.publicKey()]);
+      }
+    });
   });
 
   describe('getAssembledXdr only includes verified signatures', () => {

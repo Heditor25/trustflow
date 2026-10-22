@@ -285,6 +285,14 @@ The suite waits for Horizon, Soroban RPC (`getHealth`) and friendbot before star
 ## Hook tests
 Hook tests run under jsdom via `@testing-library/react`. CI runs them on React 18 and 19; locally, use `npm install --no-save react@19 react-dom@19 @types/react@19 @types/react-dom@19` to try React 19.
 
+## GitHub Actions & CI Standards
+
+When writing or modifying GitHub Actions workflows in `.github/workflows/`:
+- **Least-privilege permissions**: Declare top-level `permissions: contents: read` (or job-level specific permissions) rather than relying on repository defaults.
+- **SHA-pinning**: Pin all third-party actions to full commit SHAs with the release tag in a trailing comment (e.g. `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`). Dependabot is configured to track updates for both `npm` and `github-actions`.
+- **Concurrency & Timeouts**: Include a `concurrency` block with `cancel-in-progress: true` for pull requests to cancel superseded runs, and specify `timeout-minutes` on every job.
+- **Documentation Publishing**: Pushes to `main` automatically publish the generated TypeDoc API reference to GitHub Pages.
+
 ## Releasing
 See [docs/RELEASING.md](docs/RELEASING.md).
 

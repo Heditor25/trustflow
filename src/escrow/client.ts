@@ -1,6 +1,12 @@
 import { ContractConfig } from '../types/contract';
 import { EscrowParams, EscrowState, SDKResult, GetGigsParams, GigsPage } from '../types/index';
-import { assertStellarAddress, isValidEscrowId, xlmToStroops, STELLAR_ADDRESS_RE, CONTRACT_ID_RE } from '../utils/validation';
+import {
+  assertStellarAddress,
+  isValidEscrowId,
+  xlmToStroops,
+  STELLAR_ADDRESS_RE,
+  CONTRACT_ID_RE,
+} from '../utils/validation';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
 import type { ApiRetryConfig } from '../utils/http';
 import type { HttpInterceptors } from '../utils/interceptors';
@@ -38,6 +44,51 @@ export interface TrustFlowEscrowClientOptions {
    * `config.interceptors`.
    */
   interceptors?: HttpInterceptors;
+}
+
+function parseFilterDate(val: Date | number | string): string | null {
+  try {
+    const d = val instanceof Date ? val : new Date(val);
+    if (isNaN(d.getTime())) {
+      return null;
+    }
+    return d.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function parseFilterAmount(
+  val: bigint | number | string,
+  name: string,
+): { ok: true; num: number; str: string } | { ok: false; error: string } {
+  if (typeof val === 'number') {
+    if (isNaN(val) || !isFinite(val)) {
+      return { ok: false, error: `${name} must be a valid number` };
+    }
+    if (val < 0) {
+      return { ok: false, error: `${name} cannot be negative` };
+    }
+    return { ok: true, num: val, str: String(val) };
+  }
+  if (typeof val === 'bigint') {
+    if (val < 0n) {
+      return { ok: false, error: `${name} cannot be negative` };
+    }
+    return { ok: true, num: Number(val), str: val.toString() };
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '' || isNaN(Number(trimmed))) {
+      return { ok: false, error: `${name} must be a valid numeric value` };
+    }
+    const num = Number(trimmed);
+    if (num < 0) {
+      return { ok: false, error: `${name} cannot be negative` };
+    }
+    return { ok: true, num, str: trimmed };
+  }
+  return { ok: false, error: `Invalid ${name} value` };
 }
 
 /**
@@ -309,38 +360,71 @@ export class TrustFlowEscrowClient {
       query.set('beneficiary', params.beneficiary);
     }
     if (params.tokenAddress) {
-      if (!STELLAR_ADDRESS_RE.test(params.tokenAddress) && !CONTRACT_ID_RE.test(params.tokenAddress)) {
+      if (
+        !STELLAR_ADDRESS_RE.test(params.tokenAddress) &&
+        !CONTRACT_ID_RE.test(params.tokenAddress)
+      ) {
         return { ok: false, error: `Invalid tokenAddress: "${params.tokenAddress}"` };
       }
       query.set('tokenAddress', params.tokenAddress);
     }
     if (params.createdAfter !== undefined) {
-      const dateStr = params.createdAfter instanceof Date
-        ? params.createdAfter.toISOString()
-        : typeof params.createdAfter === 'number'
-          ? new Date(params.createdAfter).toISOString()
-          : String(params.createdAfter);
+      const dateStr = parseFilterDate(params.createdAfter);
+      if (!dateStr) {
+        return { ok: false, error: `Invalid createdAfter: "${String(params.createdAfter)}"` };
+      }
       query.set('createdAfter', dateStr);
     }
     if (params.createdBefore !== undefined) {
-      const dateStr = params.createdBefore instanceof Date
-        ? params.createdBefore.toISOString()
-        : typeof params.createdBefore === 'number'
-          ? new Date(params.createdBefore).toISOString()
-          : String(params.createdBefore);
+      const dateStr = parseFilterDate(params.createdBefore);
+      if (!dateStr) {
+        return { ok: false, error: `Invalid createdBefore: "${String(params.createdBefore)}"` };
+      }
       query.set('createdBefore', dateStr);
     }
+
+    let minNum: number | undefined;
+    let maxNum: number | undefined;
+
     if (params.minAmount !== undefined) {
-      query.set('minAmount', String(params.minAmount));
+      const parsed = parseFilterAmount(params.minAmount, 'minAmount');
+      if (!parsed.ok) {
+        return parsed;
+      }
+      minNum = parsed.num;
+      query.set('minAmount', parsed.str);
     }
     if (params.maxAmount !== undefined) {
-      query.set('maxAmount', String(params.maxAmount));
+      const parsed = parseFilterAmount(params.maxAmount, 'maxAmount');
+      if (!parsed.ok) {
+        return parsed;
+      }
+      maxNum = parsed.num;
+      query.set('maxAmount', parsed.str);
     }
+    if (minNum !== undefined && maxNum !== undefined && minNum > maxNum) {
+      return { ok: false, error: 'minAmount cannot be greater than maxAmount' };
+    }
+
+    const ALLOWED_SORT_BY = ['created_at', 'amount', 'deadline', 'status'];
     if (params.sortBy) {
+      if (!ALLOWED_SORT_BY.includes(params.sortBy)) {
+        return {
+          ok: false,
+          error: `Invalid sortBy: "${params.sortBy}". Must be one of: ${ALLOWED_SORT_BY.join(', ')}`,
+        };
+      }
       query.set('sortBy', params.sortBy);
     }
+    const ALLOWED_SORT_ORDER = ['asc', 'desc'];
     if (params.sortOrder) {
-      query.set('sortOrder', params.sortOrder);
+      if (!ALLOWED_SORT_ORDER.includes(params.sortOrder.toLowerCase())) {
+        return {
+          ok: false,
+          error: `Invalid sortOrder: "${params.sortOrder}". Must be one of: ${ALLOWED_SORT_ORDER.join(', ')}`,
+        };
+      }
+      query.set('sortOrder', params.sortOrder.toLowerCase());
     }
 
     const http = createApiHttpClient({

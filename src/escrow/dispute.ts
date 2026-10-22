@@ -1,13 +1,14 @@
 import type { TrustFlowClient } from '../client';
 import type { ContractConfig } from '../types/contract';
 import type { DisputeEscrowParams } from '../types';
-import { DisputeParams, SDKResult } from '../types/index';
+import { Dispute, DisputeParams, SDKResult } from '../types/index';
 import { TrustFlowError } from '../errors';
 import { buildDisputeArgs } from '../contract/build';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
 import type { ApiRetryConfig } from '../utils/http';
 import type { HttpInterceptors } from '../utils/interceptors';
 import { logger } from '../utils/logger';
+import { isValidEscrowId } from '../utils/validation';
 
 /**
  * Raises a dispute directly against the TrustFlow contract.
@@ -51,7 +52,7 @@ export async function disputeEscrow(
   }
   // Encoded ScVal args are ready for the shared tx-pipeline once wired to a
   // live signer; this returns the prepared call metadata in the meantime.
-  const args = buildDisputeArgs(params.escrowId, params.reason);
+  const args = buildDisputeArgs(params.escrowId, params.caller, params.reason);
   void args;
   // Soroban contract call: dispute(escrow_id, caller, reason)
   return `tx_dispute_${params.escrowId}_${Date.now()}`;
@@ -106,14 +107,13 @@ export class DisputeClient {
     legacyOptions: DisputeClientOptions = {},
   ) {
     const config = typeof configOrUrl === 'string' ? undefined : configOrUrl;
-    this.apiUrl = config ? config.apiBaseUrl ?? '' : String(configOrUrl);
+    this.apiUrl = config ? (config.apiBaseUrl ?? '') : String(configOrUrl);
     this.token = config
-      ? config.apiKey ?? ''
+      ? (config.apiKey ?? '')
       : typeof tokenOrOptions === 'string'
         ? tokenOrOptions
         : '';
-    const options =
-      typeof tokenOrOptions === 'string' ? legacyOptions : tokenOrOptions;
+    const options = typeof tokenOrOptions === 'string' ? legacyOptions : tokenOrOptions;
 
     if (!this.apiUrl) {
       throw new Error('apiBaseUrl is required for DisputeClient');
@@ -152,6 +152,12 @@ export class DisputeClient {
    * ```
    */
   async raiseDispute(params: DisputeParams): Promise<SDKResult<{ disputeId: string }>> {
+    if (!params || !isValidEscrowId(params.escrowId)) {
+      return { ok: false, error: 'escrowId is required' };
+    }
+    if (typeof params.reason !== 'string' || params.reason.trim().length < 10) {
+      return { ok: false, error: 'Dispute reason must be at least 10 characters' };
+    }
     try {
       const response = await this.http.post<{ id: string }>('/disputes', params);
       const data = response.data;
@@ -179,9 +185,12 @@ export class DisputeClient {
    * if (result.ok) console.log(result.data);
    * ```
    */
-  async getDispute(escrowId: string): Promise<SDKResult<unknown>> {
+  async getDispute(escrowId: string): Promise<SDKResult<Dispute>> {
+    if (!isValidEscrowId(escrowId)) {
+      return { ok: false, error: 'escrowId is required' };
+    }
     try {
-      const response = await this.http.get<unknown>(`/disputes/${escrowId}`);
+      const response = await this.http.get<Dispute>(`/disputes/${encodeURIComponent(escrowId)}`);
       return { ok: true, data: response.data };
     } catch (e) {
       logger.error(`Failed to get dispute for escrow ${escrowId}`, e);

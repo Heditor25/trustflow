@@ -1,7 +1,7 @@
 import { rpc, Transaction, scValToNative } from '@stellar/stellar-sdk';
 import { TrustFlowError } from '../errors';
 import { withTransientRetry } from '../utils/node-retry';
-import { logger } from '../utils/logger';
+import { describeError, logger } from '../utils/logger';
 import type { ReadContractStateOptions } from './read';
 import type { ApiRetryConfig } from '../utils/http';
 
@@ -29,6 +29,12 @@ export interface SimulationOutcome {
   minResourceFee?: string;
   /** The raw Soroban transaction data (base64 XDR) needed for `rpc.assembleTransaction`. */
   transactionData?: any;
+  /**
+   * The full parsed success response. `rpc.assembleTransaction` needs it whole,
+   * including the authorization entries under `result.auth`, which none of the
+   * fields above carry.
+   */
+  response?: rpc.Api.SimulateTransactionSuccessResponse;
 }
 
 /**
@@ -102,12 +108,13 @@ export async function simulateTransaction(
       returnValue: retval ? scValToNative(retval) : undefined,
       minResourceFee: result.minResourceFee,
       transactionData: result.transactionData,
+      response: result,
     };
   } catch (e) {
     // A `TIMEOUT` (or any typed SDK error) keeps its code rather than being
     // re-wrapped as a generic simulation failure.
     if (e instanceof TrustFlowError) throw e;
-    logger.error('Contract simulation failed', { error: e });
+    logger.error('Contract simulation failed', { error: describeError(e) });
     throw new TrustFlowError('Simulation failed', 'SIMULATION_ERROR', e);
   }
 }

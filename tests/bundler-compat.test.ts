@@ -227,6 +227,19 @@ describe('browser bundle compatibility', () => {
     expect(doc).toMatch(/npm run test:bundlers/);
   });
 
+  it('ensures BROWSER_SUPPORT.md points to BROWSER_COMPATIBILITY.md without contradiction', () => {
+    const supportDoc = fs.readFileSync(path.join(repoRoot, 'docs/BROWSER_SUPPORT.md'), 'utf8');
+    const compatDoc = fs.readFileSync(path.join(repoRoot, 'docs/BROWSER_COMPATIBILITY.md'), 'utf8');
+
+    expect(supportDoc).toMatch(/BROWSER_COMPATIBILITY\.md/);
+    expect(supportDoc).toMatch(/Safari.*15\.4/);
+    expect(compatDoc).toMatch(/Safari.*15\.4/);
+    expect(supportDoc).toMatch(/Chrome.*49/);
+    expect(compatDoc).toMatch(/Chrome.*49/);
+    expect(supportDoc).toMatch(/Firefox.*52/);
+    expect(compatDoc).toMatch(/Firefox.*52/);
+  });
+
   it('ships a Webpack 5 example with no resolve.fallback or ProvidePlugin', () => {
     const config = fs.readFileSync(
       path.join(repoRoot, 'examples/bundlers/webpack5/webpack.config.js'),

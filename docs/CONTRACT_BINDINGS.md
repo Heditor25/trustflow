@@ -170,10 +170,11 @@ or for a contract spec that declares the same struct field twice.
   resolve with the transaction hash, which becomes `txHash`. As implemented, **no confirmation polling
   happens**: `invokeContract` returns as soon as the callback resolves, so `success: true` with a
   `txHash` means the callback returned, not that the transaction was included in a ledger.
-- A failed simulation returns `{ success: false }`, and any error thrown while building, simulating or
-  inside the callback is caught and also returned as `{ success: false }`; the underlying error is not
-  exposed. Argument encoding errors are the exception: they are thrown by `invoke` before the call is
-  made.
+- A failed simulation returns `{ success: false, error }`, and any error thrown while resolving the
+  account, building, simulating or inside the callback is caught and also returned as
+  `{ success: false, error }`. When that error is a `TrustFlowError`, `code` carries its typed code, such
+  as `TIMEOUT` or `ACCOUNT_NOT_FOUND`, so you can branch on it without parsing `error`. Argument encoding
+  errors are the exception: they are thrown by `invoke` before the call is made.
 - `result` is `decodeReturnValue(...)` of `returnValue`, and is `undefined` when there is no return value.
 
 `simulate_*` encodes the arguments, joins their base64 XDR strings and passes them to

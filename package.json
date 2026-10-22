@@ -49,12 +49,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Chidubemkingsley/trustflow-sdk.git"
+    "url": "git+https://github.com/trustflow-protocol/trustflow-sdk.git"
   },
   "bugs": {
-    "url": "https://github.com/Chidubemkingsley/trustflow-sdk/issues"
+    "url": "https://github.com/trustflow-protocol/trustflow-sdk/issues"
   },
-  "homepage": "https://github.com/Chidubemkingsley/trustflow-sdk#readme",
+  "homepage": "https://github.com/trustflow-protocol/trustflow-sdk#readme",
   "keywords": [
     "stellar",
     "soroban",
@@ -82,7 +82,8 @@
     "test": "jest",
     "test:coverage": "jest --coverage",
     "test:e2e": "jest --config jest.e2e.config.js",
-    "examples": "ts-node examples/",
+    "examples": "tsx",
+    "examples:check": "tsc -p examples/tsconfig.json --noEmit",
     "lint": "eslint src",
     "lint:strict": "eslint src --config eslint.strict.config.mjs",
     "lint:fix": "eslint src --fix",
@@ -90,9 +91,12 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
+    "check-docs": "node scripts/check-doc-coverage.js",
     "prepublishOnly": "npm run build",
     "test:bundlers": "node examples/bundlers/verify-bundlers.mjs",
-    "examples:multi-account": "esbuild examples/multi-account.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/trustflow-multi-account.cjs --log-level=error && node node_modules/.cache/trustflow-multi-account.cjs"
+    "examples:multi-account": "esbuild examples/multi-account.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/trustflow-multi-account.cjs --log-level=error && node node_modules/.cache/trustflow-multi-account.cjs",
+    "size": "size-limit",
+    "treeshake:check": "node scripts/verify-treeshaking.mjs"
   },
   "license": "MIT",
   "dependencies": {
@@ -137,6 +141,9 @@
     "typedoc": "^0.28.20",
     "typescript": "^6.0.3",
     "webpack": "^5.97.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "size-limit": "^11.1.6",
+    "@size-limit/preset-small-lib": "^11.1.6",
+    "tsx": "^4.19.3"
   }
 }

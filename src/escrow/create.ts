@@ -41,8 +41,9 @@ export async function createEscrow(
     deadlineSeconds = validateFutureExpiration(deadlineInput, deadlineField);
   }
 
+  let normalizedMilestones: any[] | undefined;
   if (params.milestones && Array.isArray(params.milestones)) {
-    normalizeMilestoneExpiration(params.milestones);
+    normalizedMilestones = normalizeMilestoneExpiration(params.milestones);
   }
 
   const args = buildCreateEscrowArgs({
@@ -50,6 +51,7 @@ export async function createEscrow(
     recipient: params.recipient,
     amountStroops: params.amountStroops,
     durationBlocks: params.durationBlocks,
+    milestones: normalizedMilestones ?? params.milestones,
   });
 
   await invokeContract(client, 'create_escrow', args, params.sender);
@@ -64,5 +66,6 @@ export async function createEscrow(
     expiresAt: deadlineSeconds !== undefined ? deadlineSeconds * 1000 : undefined,
     deadline: deadlineSeconds,
     metadata: params.metadata,
+    milestones: normalizedMilestones ?? params.milestones,
   };
 }

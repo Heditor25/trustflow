@@ -1,13 +1,20 @@
-export * from "../types";
-export * from "./contract";
-export * from "./events";
-export * from "./juror";
-export * from "./multisig";
-export * from "./profile";
+export * from '../types';
+export * from './contract';
+export * from './events';
+export * from './juror';
+export * from './multisig';
+export * from './profile';
 
 export type StellarAddress = string;
 export type EscrowId = string;
 export type TxHash = string;
+
+/** Representation of a single milestone in an escrow. */
+export interface EscrowMilestone {
+  amount: bigint;
+  description?: string;
+  deadline?: Date | number | string;
+}
 
 /** Parameters for configuring an escrow. */
 export interface EscrowParams {
@@ -21,13 +28,17 @@ export interface EscrowParams {
   tokenAddress?: StellarAddress;
   /** Optional expiration duration in blocks. */
   deadlineBlocks?: number;
+  /** Optional designated arbitrator Stellar account address. */
+  arbitrator?: StellarAddress;
+  /** Optional list of milestones for multi-milestone escrow. */
+  milestones?: EscrowMilestone[];
 }
 
 /** State of an escrow. */
 export interface EscrowState {
   id: EscrowId;
   params: EscrowParams;
-  status: "pending" | "active" | "released" | "disputed" | "cancelled";
+  status: 'pending' | 'active' | 'released' | 'disputed' | 'cancelled';
   contractEscrowId?: number;
   txHash?: TxHash;
   createdAt: number;
@@ -38,6 +49,20 @@ export interface DisputeParams {
   escrowId: EscrowId;
   reason: string;
   evidence?: string;
+}
+
+/**
+ * Representation of an escrow dispute returned by the TrustFlow backend (Issue #471).
+ */
+export interface Dispute {
+  id: string;
+  escrowId?: EscrowId;
+  reason?: string;
+  status: 'open' | 'resolving' | 'resolved' | 'cancelled' | string;
+  evidence?: string;
+  createdAt?: number | string;
+  resolvedAt?: number | string;
+  jurorCount?: number;
 }
 
 /** Standard result envelope for SDK operations. */
@@ -53,7 +78,7 @@ export interface GetGigsParams {
   /** Maximum records to return per page. Capped at 100 by the backend. Defaults to 20. */
   limit?: number;
   /** Filter by escrow status (case-insensitive string or EscrowState status). */
-  status?: EscrowState["status"] | string;
+  status?: EscrowState['status'] | string;
   /** Filter by depositor Stellar address. */
   depositor?: StellarAddress;
   /** Filter by beneficiary Stellar address. */
@@ -69,9 +94,9 @@ export interface GetGigsParams {
   /** Filter by maximum amount. */
   maxAmount?: bigint | number | string;
   /** Field to sort results by. */
-  sortBy?: "created_at" | "amount" | "deadline" | "status";
+  sortBy?: 'created_at' | 'amount' | 'deadline' | 'status';
   /** Sort direction: "asc" or "desc". */
-  sortOrder?: "asc" | "desc";
+  sortOrder?: 'asc' | 'desc';
 }
 
 /**

@@ -172,11 +172,7 @@ export function formatAmount(stroops: bigint | number | string): string {
  * // 'GABCDE...QRST'
  * ```
  */
-export function truncateAddress(
-  address: string,
-  prefixLen = 6,
-  suffixLen = 4
-): string {
+export function truncateAddress(address: string, prefixLen = 6, suffixLen = 4): string {
   if (address.length <= prefixLen + suffixLen + 3) {
     return address;
   }
@@ -219,7 +215,7 @@ export function formatDateTime(
     dateStyle: 'medium',
     timeStyle: 'medium',
     timeZone: 'UTC',
-  }
+  },
 ): string {
   return new Intl.DateTimeFormat(locale, options).format(new Date(ms));
 }

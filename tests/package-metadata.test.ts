@@ -108,7 +108,7 @@ describe('package.json metadata', () => {
     const url = repository.url.replace(/^git\+/, '').replace(/\.git$/, '');
 
     expect(repository.type).toBe('git');
-    expect(url).toMatch(/^https:\/\/github\.com\/[\w.-]+\/trustflow-sdk$/);
+    expect(url).toBe('https://github.com/trustflow-protocol/trustflow-sdk');
 
     const bugs = pkg.bugs as { url: string };
     expect(bugs.url).toBe(`${url}/issues`);

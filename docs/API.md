@@ -14,6 +14,7 @@ new TrustFlowClient(config: ClientConfig)
 - `contractId` — Soroban contract ID for TrustFlow escrow (required)
 - `network` — Network type ('TESTNET' or 'MAINNET'), defaults to TESTNET
 - `rpcUrl` — Optional custom Soroban RPC URL
+- `rpcHeaders` — Optional extra headers sent with every Soroban RPC request, such as an API key for a managed RPC provider. Values are kept out of SDK error logs and `inspect` output
 - `apiBaseUrl` — Optional TrustFlow API base URL for backend integration
 - `apiKey` — Optional API key for authenticated requests
 - `ipfs` — Optional IPFS configuration for `storage.upload()`
@@ -314,6 +315,10 @@ After obtaining a token, persist it using the session storage functions:
   
 - `clearSession()` — Removes the token from storage
   
+- `clearAllSessions()` — Purges **every** persisted session artifact: the unscoped token/address/expiry trio via the active storage adapter, plus every `trustflow_`-prefixed key in `localStorage` and `sessionStorage` (account-scoped sessions such as `trustflow_token:<scope>`, legacy refresh-token/nonce keys, etc.)
+  - `useWallet().disconnect()` calls this automatically, so signing out of the wallet also revokes cached auth state — reconnecting requires a fresh signing challenge instead of silently reusing a stored JWT
+  - A custom adapter installed with `configureSessionStorage()` is always cleared of the three base keys; adapters that expose no key enumeration cannot be swept for scope-suffixed entries
+  
 - `configureSessionStorage(adapter)` — Override the storage backend (for Node.js durability or tests)
   ```typescript
   configureSessionStorage({
@@ -327,10 +332,12 @@ After obtaining a token, persist it using the session storage functions:
 
 - `requestChallenge(apiUrl, address, options?)` — get signing challenge with retry-aware backend transport
 - `verifyAndGetToken(apiUrl, address, signature, options?)` — exchange signature for JWT with retry-aware backend transport
+- `decodeJwtExpMs(token)` → `number | null` — extract a JWT's `exp` claim as a UNIX-ms timestamp (base64url-safe; works with or without a global `Buffer`; never throws)
 - `saveSession(token, address, expiresAt?)` — persist session token (auto-detects browser vs Node storage)
 - `loadSession()` → `Session | null` — retrieve saved session token
 - `isSessionExpired(session?)` → `boolean` — check token expiry (client-side estimate)
 - `clearSession()` — remove token from storage
+- `clearAllSessions()` — revoke every persisted session artifact (unscoped, scoped, and legacy keys)
 - `configureSessionStorage(adapter)` — override storage backend
 
 ## Wallet Module
@@ -393,6 +400,10 @@ const uri = generateSep7Uri(preparedXdr, {
 - `getAlbedo()` — Gets the Albedo wallet adapter
   - Returns the Albedo instance (does not throw if unavailable; returns null or throws on actual use)
 
+- `signWithAlbedo(transaction, network, options?)` — Signs a `Transaction` or `FeeBumpTransaction` with Albedo and verifies the response
+  - Returns `Promise<{ xdr, hash }>`; the `xdr` can be submitted to Horizon as-is
+  - Throws `UNAUTHORIZED` when Albedo is not installed, `USER_REJECTED` when the user declines, and `SIGNING_ERROR` for an unsupported network or an envelope that does not verify
+
 ### Types
 
 - `WalletType` — Union of supported types: `'freighter' | 'albedo' | 'xbull' | 'manual'`
@@ -406,21 +417,36 @@ const uri = generateSep7Uri(preparedXdr, {
   ```
   Note: This object contains connection state only. To sign, obtain the wallet adapter directly from `getFreighter()` or similar.
   
-- `WalletAdapter` — Interface for wallet provider APIs (not returned by `connectWallet`):
+- `WalletAdapter` — Uniform interface for wallet providers (#435). Not returned by `connectWallet`;
+  obtain a concrete adapter from `createFreighterAdapter()`:
   ```typescript
   interface WalletAdapter {
     type: WalletType;
     isAvailable(): Promise<boolean>;
     connect(): Promise<WalletConnection>;
     sign(xdr: string, network: string): Promise<string>;  // Sign an XDR transaction
+    signMessage(message: string): Promise<string>;        // Sign a UTF-8 message, base64 signature
     disconnect(): Promise<void>;
   }
   ```
+- `createFreighterAdapter()` — Returns a `WalletAdapter` backed by the injected Freighter extension (#435).
+  The extension is looked up on each call. `isAvailable()` resolves `false` when it is missing; the other
+  methods throw `TrustFlowError` with code `UNAUTHORIZED`.
+  ```typescript
+  import { createFreighterAdapter } from '@trustflow/sdk/wallet';
+
+  const adapter = createFreighterAdapter();
+  if (await adapter.isAvailable()) {
+    const { publicKey } = await adapter.connect();
+  }
+  ```
+  `MockWalletAdapter.asWalletAdapter()` (from `@trustflow/sdk/testing`) returns the same interface for tests.
 
 ### Example
 
 ```typescript
-import { connectWallet, isFreighterInstalled } from '@trustflow/sdk';
+// Wallet helpers live on the `/wallet` subpath, not the package root (#439).
+import { connectWallet, isFreighterInstalled, TrustFlowError } from '@trustflow/sdk/wallet';
 
 // Check if Freighter is available
 const installed = await isFreighterInstalled();
@@ -506,7 +532,9 @@ re-implementing the rules:
 
 - `StellarAddressSchema`, `ContractIdSchema`, `StroopsSchema`, `NetworkSchema` — primitives
 - `CreateEscrowSchema`, `ReleaseEscrowSchema`, `DisputeEscrowSchema` — escrow operation inputs
-- `ClientConfigSchema` — `new TrustFlowClient(...)` config
+- `ClientConfigSchema` — `new TrustFlowClient(...)` config. It covers every serializable field of
+  `ClientConfig`; the live `rpcServer` / `horizonServer` seams are excluded because they are objects,
+  not data. The constructor performs its own checks rather than running this schema (#437).
 - Inferred types `CreateEscrowInput`, `ReleaseEscrowInput`, `DisputeEscrowInput` are exported
   alongside their schemas. (`Network`/`ClientConfig` are not re-exported under those names from
   the root — they'd collide with the existing plain TS types of the same name; derive them
@@ -930,8 +958,92 @@ Create pre-formatted errors:
 - `TrustFlowError.feeBumpFailed(detail: string, cause?: unknown)` — 'FEE_BUMP_ERROR' error
 - `TrustFlowError.submissionFailed(detail: string, cause?: unknown)` — 'SUBMISSION_ERROR' error
 - `TrustFlowError.signingFailed(detail: string, cause?: unknown)` — 'SIGNING_ERROR' error
-- `TrustFlowError.retryExhausted(stage: string, attempts: number, cause?: unknown)` — 'RETRY_EXHAUSTED' error
 
+## React Hooks (`@trustflow/sdk/react`)
+
+Client-side hooks for React dApps, exported from `@trustflow/sdk/react`:
+
+### `useWallet`
+```typescript
+const { wallet, connecting, error, connect, disconnect } = useWallet(defaultWalletType?);
+```
+Manages wallet connection state (Freighter, Albedo, etc.).
+
+### `useBalance`
+```typescript
+const { balance, loading, error } = useBalance(client, address);
+```
+Fetches XLM balance for a Stellar address, automatically re-fetching and resetting when address changes. A balance is only returned for the address it was fetched for: while a new address loads, `balance` is `null` and `loading` is `true`, and responses for the previous address are ignored.
+
+### `useTransaction`
+```typescript
+const { status, hash, error, execute, reset, isPending } = useTransaction();
+```
+Tracks transaction submission lifecycle (`idle` | `pending` | `success` | `error`).
+
+### `useEscrow`
+```typescript
+const { escrow, loading, error, create, release, cancel, dispute, refresh } = useEscrow(client);
+```
+Wraps escrow lifecycle actions with shared `loading`, `error`, and `escrow` state, guarded against race conditions on overlapping calls:
+- `create(params)` — creates a new escrow
+- `release(escrowId, caller)` — releases funds to beneficiary
+- `cancel(escrowId, caller)` — cancels escrow and returns funds to depositor
+- `dispute(escrowId, caller, reason)` — raises a contract-level dispute
+- `refresh(escrowId)` — re-fetches and updates the on-chain escrow state
+
+### `useProfile`
+```typescript
+const { profile, loading, error, update } = useProfile(profileClient, address);
+```
+Fetches and manages a user's profile from the backend API:
+- Automatically re-fetches when `address` changes, resetting state appropriately.
+- `update(params)` — updates the user's profile via `ProfileClient.updateProfile`.
+
+### `useJuror`
+```typescript
+const { loading, error, vote, createVoteCommitment, revealVote } = useJuror(jurorClient);
+```
+Provides juror operations with managed `loading` and `error` state:
+- `vote(params)` — casts a plaintext or encrypted vote on a dispute
+- `createVoteCommitment(voteForDepositor, salt?)` — generates a 32-byte salt commitment for commit-reveal voting
+- `revealVote(voteForDepositor, salt)` — verifies and creates a reveal payload matching contract preimage requirements
+
+## Node Connection Pooling (`@trustflow/sdk/node`)
+
+Node-only HTTP and HTTPS connection-pool factories and helpers:
+
+```typescript
+import {
+  createHttpAgent,
+  createHttpsAgent,
+  configureAxiosConnectionPool,
+  DEFAULT_POOL_CONFIG,
+  getHttpAgentStats,
+  monitorPoolHealth,
+  destroyPoolAgent,
+  type PoolConfig,
+  type PoolStats,
+  type PooledAgent,
+  type PoolMonitorConfig,
+} from '@trustflow/sdk/node';
+```
+
+### Functions
+
+- `createHttpAgent(config?: PoolConfig): http.Agent` — creates a keep-alive Node `http.Agent` with connection pooling.
+- `createHttpsAgent(config?: PoolConfig): https.Agent` — creates a keep-alive Node `https.Agent` with connection pooling.
+- `configureAxiosConnectionPool(instance: AxiosInstance, config?: PoolConfig): void` — attaches pooled HTTP and HTTPS agents to an Axios instance for long-running Node processes.
+- `getHttpAgentStats(agent: PooledAgent): PoolStats` — returns current active, free, and pending socket counts for an agent.
+- `monitorPoolHealth(agent: PooledAgent, config?: PoolMonitorConfig): () => void` — starts periodic health monitoring of socket utilization, returning a teardown callback.
+- `destroyPoolAgent(agent: PooledAgent): void` — safely drains and destroys an agent's idle and active sockets.
+
+### Configuration (`PoolConfig`)
+
+- `maxSockets` — Maximum number of sockets allowed per origin (default: 50).
+- `maxFreeSockets` — Maximum number of idle sockets kept open per origin (default: 10).
+- `socketTimeoutMs` — Inactivity timeout before a socket is destroyed (default: 30000ms).
+- `keepAliveInitialDelayMs` — Initial delay before keep-alive probes are sent (default: 1000ms).
 
 ## Testing Kit (`@trustflow/sdk/testing`)
 

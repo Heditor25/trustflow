@@ -15,8 +15,8 @@
  * local stub, so the example runs offline and deterministically.
  */
 
-import { TrustFlowClient, TrustFlowError } from '../src';
-import type { AccountChangeEvent, Network } from '../src';
+import { TrustFlowClient, TrustFlowError } from '@trustflow/sdk';
+import type { AccountChangeEvent, Network } from '@trustflow/sdk';
 
 const CONTRACT_ID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
 const ALICE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';

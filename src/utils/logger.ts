@@ -20,14 +20,26 @@ function shouldLog(level: LogLevel, minLevel: LogLevel): boolean {
 /** Redact sensitive fields from log context */
 function redactContext(context: unknown): unknown {
   if (!context || typeof context !== 'object') return context;
-  
-  const sensitiveKeys = ['authorization', 'apikey', 'api_key', 'apiKey', 'token', 'secret', 'password', 'key'];
+
+  const sensitiveKeys = [
+    'authorization',
+    'apikey',
+    'api_key',
+    'apiKey',
+    'token',
+    'secret',
+    'password',
+    'key',
+  ];
   const result: Record<string, unknown> = {};
-  
+
   for (const [key, value] of Object.entries(context as Record<string, unknown>)) {
     const lowerKey = key.toLowerCase();
-    if (sensitiveKeys.some(k => lowerKey.includes(k))) {
+    if (sensitiveKeys.some((k) => lowerKey.includes(k))) {
       result[key] = '[REDACTED]';
+    } else if (Array.isArray(value)) {
+      // Preserve arrays by mapping each element through redactContext
+      result[key] = value.map((item) => redactContext(item));
     } else if (value && typeof value === 'object') {
       result[key] = redactContext(value);
     } else {
@@ -73,16 +85,16 @@ export interface SDKLoggerOptions {
 
 /**
  * SDK Logger with configurable levels, JSON output, and custom logger support.
- * 
+ *
  * @example
  * ```ts
  * // Basic usage with level control
  * const logger = new SDKLogger({ minLevel: 'debug', prefix: 'MyApp' });
  * logger.debug('Debug info', { foo: 'bar' });
- * 
+ *
  * // JSON output for log aggregation
  * const jsonLogger = new SDKLogger({ minLevel: 'info', json: true });
- * 
+ *
  * // Inject custom logger (pino, winston, etc.)
  * const customLogger = new SDKLogger({ logger: pinoLogger });
  * ```
@@ -161,7 +173,28 @@ export class SDKLogger implements Logger {
 /** Default logger instance - logs errors only by default */
 export const logger = new SDKLogger();
 
+/**
+ * Reduces a thrown value to its name, message and code for logging. Transport
+ * errors (Axios, as used by the Soroban RPC client) carry the whole request,
+ * headers included, so logging them as-is would print RPC header values such
+ * as API keys (#344).
+ */
+export function describeError(error: unknown): {
+  name?: string;
+  message: string;
+  code?: unknown;
+} {
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    return { name: error.name, message: error.message, code };
+  }
+  return { message: String(error) };
+}
+
 /** Create a child logger with a different prefix */
-export function createLogger(prefix: string, options: Omit<SDKLoggerOptions, 'prefix'> = {}): SDKLogger {
+export function createLogger(
+  prefix: string,
+  options: Omit<SDKLoggerOptions, 'prefix'> = {},
+): SDKLogger {
   return new SDKLogger({ ...options, prefix });
 }

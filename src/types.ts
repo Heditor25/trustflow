@@ -1,10 +1,11 @@
-import type { IPFSConfig } from "./storage";
-import type { ApiRetryConfig } from "./utils/http";
-import type { AddAccountInput } from "./accounts/types";
-import type { LogLevel, Logger } from "./utils/logger";
-import type { Horizon, rpc } from "@stellar/stellar-sdk";
+import type { IPFSConfig } from './storage';
+import type { ApiRetryConfig } from './utils/http';
+import type { AddAccountInput } from './accounts/types';
+import type { LogLevel, Logger } from './utils/logger';
+import type { Horizon, rpc } from '@stellar/stellar-sdk';
+import type { StellarNetwork } from './stellar/network';
 
-export type Network = "TESTNET" | "MAINNET";
+export type Network = StellarNetwork;
 
 /** Options for opt-in caching of Horizon balance lookups. */
 export interface BalanceCacheConfig {
@@ -22,14 +23,33 @@ export interface LoggingConfig {
   json?: boolean;
 }
 
+/** Configuration for multi-RPC failover with health checks. */
+export interface RpcFailoverConfig {
+  /** Array of RPC URLs for failover (at least one required when using failover). */
+  rpcUrls: string[];
+  /** Health check interval in milliseconds (default: 30000). */
+  healthCheckIntervalMs?: number;
+  /** Timeout for health check requests in milliseconds (default: 5000). */
+  healthCheckTimeoutMs?: number;
+}
+
 /** Configuration options for initializing a TrustFlowClient instance. */
 export interface ClientConfig {
-  /** Target network ("TESTNET" or "MAINNET"). Defaults to "TESTNET". */
+  /** Target network. Defaults to "TESTNET". */
   network?: Network;
   /** Soroban contract ID for the TrustFlow protocol. */
   contractId: string;
   /** Custom Soroban RPC endpoint URL. */
   rpcUrl?: string;
+  /**
+   * Extra HTTP headers sent with every Soroban RPC request, for managed RPC
+   * providers that authenticate by header (an API key, a tracing ID). The
+   * `Content-Type: application/json` header is always set. Header values are
+   * never written to SDK logs or `inspect` output.
+   */
+  rpcHeaders?: Record<string, string>;
+  /** Multi-RPC failover configuration (alternative to single rpcUrl). */
+  rpcFailover?: RpcFailoverConfig;
   /** Custom Horizon server endpoint URL. */
   horizonUrl?: string;
   /** Custom Stellar network passphrase for private / standalone networks. */
@@ -66,11 +86,11 @@ export interface ClientConfig {
 
 /** Status of an escrow contract. */
 export enum EscrowStatus {
-  Pending = "PENDING",
-  Active = "ACTIVE",
-  Released = "RELEASED",
-  Disputed = "DISPUTED",
-  Cancelled = "CANCELLED",
+  Pending = 'PENDING',
+  Active = 'ACTIVE',
+  Released = 'RELEASED',
+  Disputed = 'DISPUTED',
+  Cancelled = 'CANCELLED',
 }
 
 /** Escrow entity representation. */
@@ -84,6 +104,13 @@ export interface Escrow {
   expiresAt?: number;
   deadline?: number;
   metadata?: Record<string, string>;
+  milestones?: Array<{
+    amount?: bigint;
+    description?: string;
+    deadline?: Date | number | string;
+    expiration?: Date | number | string;
+    [key: string]: unknown;
+  }>;
 }
 
 /** Parameters for creating an escrow. */

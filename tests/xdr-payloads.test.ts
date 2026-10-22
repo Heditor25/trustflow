@@ -7,6 +7,7 @@ import {
     buildFundArgs,
     buildDisputeArgs,
     buildVoteArgs,
+    buildRevealArgs,
 } from '../src/contract/build';
 
 const ADDR_A = Keypair.random().publicKey();
@@ -89,4 +90,27 @@ describe('contract argument XDR payloads', () => {
         expect(plaintextFlag.b()).toBe(false);
         expect(encryptedFlag.b()).toBe(true);
     });
+
+    it('buildRevealArgs returns XDR-decodable ScVal values', () => {
+        const salt = new Uint8Array(32);
+        const args = buildRevealArgs('dispute-1', ADDR_A, true, salt);
+
+        expect(args).toHaveLength(4);
+        args.forEach((value) => expect(value).toBeValidScVal());
+
+        const voteFlag = args[2] as xdr.ScVal;
+        expect(voteFlag.b()).toBe(true);
+    });
+
+    it('buildRevealArgs encodes salt hex string into bytes ScVal', () => {
+        const saltHex = '00'.repeat(32);
+        const args = buildRevealArgs('dispute-1', ADDR_A, false, saltHex);
+
+        expect(args).toHaveLength(4);
+        args.forEach((value) => expect(value).toBeValidScVal());
+
+        const voteFlag = args[2] as xdr.ScVal;
+        expect(voteFlag.b()).toBe(false);
+    });
 });
+

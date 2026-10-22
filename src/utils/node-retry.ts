@@ -106,20 +106,17 @@ export async function withTransientRetry<T>(
   };
   const timeoutMs = options?.timeoutMs;
 
-  return runRetry(
-    async (attempt: number) => withTimeout(fn(attempt), timeoutMs, label),
-    {
-      attempts: policy.attempts,
-      delayMs: backoffHonouringRetryAfter(policy.baseDelayMs, policy.maxDelayMs),
-      shouldRetry: isTransientError,
-      jitter: true,
-      onRetry: (attempt: number, error: unknown, info: { willRetry: boolean }) => {
-        if (!info.willRetry) return;
-        const reason = error instanceof Error ? error.message : String(error);
-        logger.debug(
-          `retrying ${label ?? 'request'} after transient failure (attempt ${attempt}): ${reason}`,
-        );
-      },
+  return runRetry(async (attempt: number) => withTimeout(fn(attempt), timeoutMs, label), {
+    attempts: policy.attempts,
+    delayMs: backoffHonouringRetryAfter(policy.baseDelayMs, policy.maxDelayMs),
+    shouldRetry: isTransientError,
+    jitter: true,
+    onRetry: (attempt: number, error: unknown, info: { willRetry: boolean }) => {
+      if (!info.willRetry) return;
+      const reason = error instanceof Error ? error.message : String(error);
+      logger.debug(
+        `retrying ${label ?? 'request'} after transient failure (attempt ${attempt}): ${reason}`,
+      );
     },
-  );
+  });
 }

@@ -125,4 +125,77 @@ describe('AccountBalanceMonitor', () => {
     monitor.stop();
     expect(monitor.isRunning()).toBe(false);
   });
+
+  it('never has two balance checks in flight when a poll tick fires before the last one resolves', async () => {
+    const info = {
+      address: 'GBM123',
+      balanceXLM: '50',
+      sequenceNumber: '1',
+      isActive: true,
+    } as AccountInfo;
+    let resolveFirst!: (value: AccountInfo) => void;
+    const mockFetch = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<AccountInfo>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValue(info);
+
+    const monitor = new AccountBalanceMonitor({
+      address: 'GBM123',
+      pollIntervalMs: 1000,
+      fetchFn: mockFetch,
+    });
+
+    monitor.start();
+    jest.advanceTimersByTime(2000);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    resolveFirst(info);
+    await monitor.checkNow();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await monitor.checkNow();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    monitor.stop();
+  });
+
+  it('aborts a hung webhook POST after webhookTimeoutMs without blocking the check', async () => {
+    jest.useRealTimers();
+    const originalFetch = global.fetch;
+    const hangingFetch = jest.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    global.fetch = hangingFetch as any;
+
+    const monitor = new AccountBalanceMonitor({
+      address: 'GBM123',
+      minBalanceXLM: 10,
+      webhookUrl: 'https://alerts.example.com/webhook',
+      webhookTimeoutMs: 20,
+      fetchFn: jest.fn().mockResolvedValue({
+        address: 'GBM123',
+        balanceXLM: '2.5',
+        sequenceNumber: '1',
+        isActive: true,
+      } as AccountInfo),
+    });
+
+    try {
+      await expect(monitor.checkNow()).resolves.toMatchObject({ balanceXLM: '2.5' });
+      expect(hangingFetch).toHaveBeenCalledWith(
+        'https://alerts.example.com/webhook',
+        expect.objectContaining({ method: 'POST', signal: expect.anything() }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });

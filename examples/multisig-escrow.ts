@@ -4,11 +4,11 @@
  * Two approvers (e.g. a platform and an arbitrator) must both sign before
  * the release transaction is broadcast to Horizon.
  */
-import { MultiSigEscrowClient } from '../src/escrow/multisig';
+import { MultiSigEscrowClient } from '@trustflow/sdk/escrow';
 import { Networks } from '@stellar/stellar-sdk';
 
-const APPROVER_A = 'GAPPROVER_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-const APPROVER_B = 'GAPPROVER_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+const APPROVER_A = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+const APPROVER_B = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFDAGORAC526G22TYOXA2';
 
 async function main() {
   const client = new MultiSigEscrowClient({

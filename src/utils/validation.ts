@@ -60,7 +60,12 @@ export function xlmToStroops(xlm: string | number): bigint {
 }
 
 export function isValidEscrowId(value: string): boolean {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= 128;
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value.length <= 128 &&
+    !/[/?#]/.test(value)
+  );
 }
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;

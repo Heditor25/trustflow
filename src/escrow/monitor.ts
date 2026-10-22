@@ -70,6 +70,64 @@ export interface ResilientPollingOptions {
   maxBackoffMs?: number;
   /** Initial cursor when the store is empty. */
   initialCursor?: string;
+  /**
+   * If true, preserves seenKeys, seenSet, lastLedger, and lastCursor across stop/restart cycles.
+   * Defaults to false, resetting deduplication and gap-detection state for the new session.
+   */
+  resume?: boolean;
+}
+
+/** Options for {@link EscrowMonitor.getEventsIterator}. */
+export interface EventsIteratorOptions {
+  /** Starting cursor for pagination. If not provided, starts from the beginning. */
+  fromCursor?: string;
+  /** Maximum number of events to fetch in each batch. */
+  limit?: number;
+  /** Signal to cancel iteration. */
+  signal?: AbortSignal;
+}
+
+/** Async iterator for paginating through contract events. */
+export class EventsIterator implements AsyncIterable<ParsedTrustFlowEvent> {
+  constructor(
+    private fetchFn: CursorAwareFetchFn,
+    private options: EventsIteratorOptions = {},
+  ) {}
+
+  async *[Symbol.asyncIterator](): AsyncIterator<ParsedTrustFlowEvent> {
+    let cursor = this.options.fromCursor;
+    const { signal } = this.options;
+
+    while (true) {
+      if (signal?.aborted) {
+        throw new DOMException('Iterator aborted', 'AbortError');
+      }
+
+      try {
+        const events = await this.fetchFn(cursor);
+        if (!events || events.length === 0) {
+          break;
+        }
+
+        for (const event of events) {
+          if (signal?.aborted) {
+            throw new DOMException('Iterator aborted', 'AbortError');
+          }
+          yield event;
+        }
+
+        const lastEvent = events[events.length - 1];
+        cursor = lastEvent.pagingToken || lastEvent.id;
+      } catch (error) {
+        // Re-throw abort errors as-is
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          throw error;
+        }
+        // For other errors, rethrow with context
+        throw error;
+      }
+    }
+  }
 }
 
 /**
@@ -99,8 +157,18 @@ export type CursorAwareFetchFn = (cursor?: string) => Promise<ParsedTrustFlowEve
  * is older than the RPC retention window it cannot be backfilled and is
  * reported as a gap.
  */
+export interface TopicFilter {
+  /** Event type to filter */
+  type: TrustFlowEventType;
+  /** Topic index to match (e.g., 0 for event type, 1 for escrowId, 2 for sender) */
+  topicIndex: number;
+  /** Expected value at the topic index */
+  value: string;
+}
+
 export class EscrowMonitor {
   private handlers = new Map<string, Set<EventHandler>>();
+  private topicFilters: TopicFilter[] = [];
   private pollingInterval?: ReturnType<typeof setInterval>;
   private resilientTimer?: ReturnType<typeof setTimeout>;
   private resilientStopped = true;
@@ -112,6 +180,7 @@ export class EscrowMonitor {
   private lastLedger?: number;
   private lastCursor?: string;
   private consecutiveFailures = 0;
+  private catchingUp = false;
 
   /**
    * Register a handler for `type`, narrowed to that event's payload (#287).
@@ -206,15 +275,98 @@ export class EscrowMonitor {
   }
 
   /**
+   * Add a topic-based filter for contract events.
+   * Events matching the filter will only be delivered to handlers registered for that event type.
+   *
+   * Useful for filtering events by specific values in the contract event topics,
+   * such as listening only for events related to a specific escrow ID or account.
+   *
+   * @param filter - Topic filter criteria
+   * @returns `this` for chaining
+   *
+   * @example
+   * ```ts
+   * // Only deliver escrow_created events where sender is 'GSENDER...'
+   * monitor.addTopicFilter({
+   *   type: 'escrow_created',
+   *   topicIndex: 2,
+   *   value: 'GSENDER...'
+   * });
+   * ```
+   */
+  addTopicFilter(filter: TopicFilter): this {
+    // Prevent duplicate filters
+    const exists = this.topicFilters.some(
+      (f) =>
+        f.type === filter.type && f.topicIndex === filter.topicIndex && f.value === filter.value,
+    );
+    if (!exists) {
+      this.topicFilters.push(filter);
+    }
+    return this;
+  }
+
+  /**
+   * Remove a previously registered topic filter.
+   *
+   * @param filter - Topic filter to remove
+   * @returns `this` for chaining
+   */
+  removeTopicFilter(filter: TopicFilter): this {
+    this.topicFilters = this.topicFilters.filter(
+      (f) =>
+        !(f.type === filter.type && f.topicIndex === filter.topicIndex && f.value === filter.value),
+    );
+    return this;
+  }
+
+  /**
+   * Check if an event matches all registered topic filters for its type.
+   * @internal
+   */
+  private matchesTopicFilters(event: ParsedTrustFlowEvent): boolean {
+    const filtersForType = this.topicFilters.filter((f) => f.type === event.type);
+    if (filtersForType.length === 0) {
+      return true; // No filters for this type, passes
+    }
+    // All filters for this event type must match
+    return filtersForType.every((filter) => {
+      // This would require access to raw topics, which we don't have in ParsedTrustFlowEvent
+      // For now, we match based on data properties when available
+      if (event.type === 'escrow_created' && 'data' in event) {
+        const data = event.data as any;
+        if (filter.topicIndex === 1) return data.escrowId === filter.value;
+        if (filter.topicIndex === 2) return data.sender === filter.value;
+        if (filter.topicIndex === 3) return data.recipient === filter.value;
+      }
+      if (event.type === 'escrow_released' && 'data' in event) {
+        const data = event.data as any;
+        if (filter.topicIndex === 1) return data.escrowId === filter.value;
+        if (filter.topicIndex === 2) return data.recipient === filter.value;
+      }
+      if (event.type === 'dispute_raised' && 'data' in event) {
+        const data = event.data as any;
+        if (filter.topicIndex === 1) return data.escrowId === filter.value;
+        if (filter.topicIndex === 2) return data.raisedBy === filter.value;
+      }
+      return false;
+    });
+  }
+
+  /**
    * Dispatch a batch of already-parsed events to their registered handlers
    * (plus any `'*'` wildcard handlers). Handler rejections are logged and
    * forwarded to {@link EscrowMonitor.onError}, not thrown, so one bad handler
    * can't stop the rest.
+   *
+   * Events are filtered by any registered topic filters before dispatch.
    */
   deliver(events: ParsedTrustFlowEvent[]): void {
     if (!Array.isArray(events)) return;
     for (const event of events) {
       if (!event || !event.type) continue;
+      // Apply topic filters
+      if (!this.matchesTopicFilters(event)) continue;
       const handlers = this.handlers.get(event.type) ?? new Set<EventHandler>();
       const wildcards = this.handlers.get('*') ?? new Set<EventHandler>();
       [...handlers, ...wildcards].forEach((h) => {
@@ -271,11 +423,18 @@ export class EscrowMonitor {
   ): void {
     this.stopPolling();
     this.resilientStopped = false;
+    if (!options.resume) {
+      this.seenKeys = [];
+      this.seenSet.clear();
+      this.lastLedger = undefined;
+      this.lastCursor = undefined;
+    }
     const store = options.store ?? new InMemoryCursorStore(options.initialCursor);
     const dedupSize = options.dedupSize ?? 1000;
     const baseBackoffMs = options.baseBackoffMs ?? 1000;
     const maxBackoffMs = options.maxBackoffMs ?? 30000;
     this.consecutiveFailures = 0;
+    this.catchingUp = false;
 
     const remember = (key: string): void => {
       if (this.seenSet.has(key)) return;
@@ -321,7 +480,8 @@ export class EscrowMonitor {
         return;
       }
 
-      if (this.consecutiveFailures > 0) {
+      const recovering = this.consecutiveFailures > 0;
+      if (recovering) {
         this.reconnectCallback?.({ cursor, failures: this.consecutiveFailures });
         logger.info('Event polling reconnected', { failures: this.consecutiveFailures });
       }
@@ -330,9 +490,13 @@ export class EscrowMonitor {
       const fresh = events.filter(
         (e): e is ParsedTrustFlowEvent => Boolean(e) && typeof e.type === 'string',
       );
+      // Track keys accepted earlier in this same batch too, so a page that repeats an
+      // event (common when the RPC resends the cursor's event) dispatches it once.
+      const batchKeys = new Set<string>();
       const deduped = fresh.filter((e) => {
         const key = e.pagingToken || e.id;
-        if (this.seenSet.has(key)) return false;
+        if (this.seenSet.has(key) || batchKeys.has(key)) return false;
+        batchKeys.add(key);
         return true;
       });
 
@@ -366,7 +530,14 @@ export class EscrowMonitor {
         });
       }
 
-      schedule(intervalMs);
+      // After a reconnect, poll again straight away while new events keep arriving, so the
+      // missed ledgers are replayed in order before live polling resumes at `intervalMs`.
+      if (deduped.length === 0) {
+        this.catchingUp = false;
+      } else if (recovering) {
+        this.catchingUp = true;
+      }
+      schedule(this.catchingUp ? 0 : intervalMs);
     };
 
     void tick();
@@ -388,6 +559,36 @@ export class EscrowMonitor {
       async (cursor) => parseEvents(await fetchRaw(cursor), contractId),
       options,
     );
+  }
+
+  /**
+   * Returns an async iterator for paginating through historical contract events.
+   *
+   * The iterator automatically handles cursor pagination and can be cancelled via AbortSignal.
+   * Uses `for await...of` to iterate through events:
+   *
+   * @param fetchFn - Cursor-aware fetcher that returns parsed events
+   * @param options - Iterator options (cursor, limit, abort signal)
+   * @returns An async iterable that yields ParsedTrustFlowEvent
+   *
+   * @example
+   * ```ts
+   * const monitor = new EscrowMonitor();
+   * const iterator = monitor.getEventsIterator(async (cursor) => {
+   *   const page = await fetchContractEvents(server, { contractId, cursor });
+   *   return parseEvents(page.events, contractId);
+   * });
+   *
+   * for await (const event of iterator) {
+   *   console.log(event.type, event.data);
+   * }
+   * ```
+   */
+  getEventsIterator(
+    fetchFn: CursorAwareFetchFn,
+    options: EventsIteratorOptions = {},
+  ): AsyncIterable<ParsedTrustFlowEvent> {
+    return new EventsIterator(fetchFn, options);
   }
 
   stopPolling(): void {

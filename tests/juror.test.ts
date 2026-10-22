@@ -211,4 +211,257 @@ describe('commit-reveal voting helpers (Issue #373)', () => {
       expect(result.data.encrypted).toBe(true);
     }
   });
+
+  describe('storedSalts cache bounds and eviction', () => {
+    it('evicts oldest salt when maxStoredSalts limit is reached', () => {
+      const jurors = new JurorClient(CONFIG, { maxStoredSalts: 2 });
+      const c1 = jurors.createVoteCommitment(true);
+      const c2 = jurors.createVoteCommitment(false);
+
+      expect(jurors.getStoredSalt(c1.commitmentHex)).toBeDefined();
+      expect(jurors.getStoredSalt(c2.commitmentHex)).toBeDefined();
+
+      const c3 = jurors.createVoteCommitment(true);
+      expect(jurors.getStoredSalt(c1.commitmentHex)).toBeUndefined();
+      expect(jurors.getStoredSalt(c2.commitmentHex)).toBeDefined();
+      expect(jurors.getStoredSalt(c3.commitmentHex)).toBeDefined();
+    });
+
+    it('removes individual stored salt using removeStoredSalt', () => {
+      const jurors = new JurorClient(CONFIG);
+      const c1 = jurors.createVoteCommitment(true);
+      const c2 = jurors.createVoteCommitment(false);
+
+      expect(jurors.removeStoredSalt(c1.commitmentHex)).toBe(true);
+      expect(jurors.getStoredSalt(c1.commitmentHex)).toBeUndefined();
+      expect(jurors.getStoredSalt(c2.commitmentHex)).toBeDefined();
+
+      expect(jurors.removeStoredSalt(c1.commitmentHex)).toBe(false);
+      expect(jurors.removeStoredSalt(c2.commitment)).toBe(true);
+      expect(jurors.getStoredSalt(c2.commitmentHex)).toBeUndefined();
+    });
+
+    it('evicts expired salts when saltTtlMs is configured', async () => {
+      const jurors = new JurorClient(CONFIG, { saltTtlMs: 20 });
+      const c1 = jurors.createVoteCommitment(true);
+
+      expect(jurors.getStoredSalt(c1.commitmentHex)).toBeDefined();
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(jurors.getStoredSalt(c1.commitmentHex)).toBeUndefined();
+    });
+  });
+
+  describe('commit-reveal abstain limitation (Issue #463)', () => {
+    it('allows abstain for plaintext vote', async () => {
+      const jurors = new JurorClient(CONFIG);
+      const result = await jurors.vote({
+        disputeId: 'dsp-1',
+        jurorAddress: JUROR_ADDRESS,
+        vote: { encrypted: false, choice: 'abstain' },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.encrypted).toBe(false);
+      }
+    });
+
+    it('rejects abstain at commitment creation time', () => {
+      expect(() =>
+        // @ts-expect-error deliberately passing abstain to runtime check
+        createVoteCommitment('abstain'),
+      ).toThrow(/Commit-reveal voting does not support 'abstain'/);
+    });
+
+    it('rejects abstain at vote reveal time', () => {
+      const salt = new Uint8Array(32);
+      expect(() =>
+        // @ts-expect-error deliberately passing abstain to runtime check
+        revealVote('abstain', salt),
+      ).toThrow(/Commit-reveal voting does not support 'abstain'/);
+    });
+
+    it('rejects non-boolean types in commit-reveal helpers', () => {
+      expect(() =>
+        // @ts-expect-error deliberately passing number
+        createVoteCommitment(1),
+      ).toThrow(/voteForDepositor must be a boolean/);
+
+      expect(() =>
+        // @ts-expect-error deliberately passing number
+        revealVote(1, new Uint8Array(32)),
+      ).toThrow(/voteForDepositor must be a boolean/);
+    });
+  });
 });
+
+describe('JurorClient.submitReveal (Issue #462)', () => {
+  it('accepts a valid reveal with Uint8Array salt (object params)', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const commitment = jurors.createVoteCommitment(true);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: true,
+      salt: commitment.salt,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.disputeId).toBe('dsp-1');
+      expect(result.data.jurorAddress).toBe(JUROR_ADDRESS);
+      expect(result.data.voteForDepositor).toBe(true);
+      expect(result.data.txHash).toMatch(/^reveal-/);
+    }
+  });
+
+  it('accepts a valid reveal with hex string salt', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const commitment = jurors.createVoteCommitment(false);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: false,
+      salt: commitment.saltHex,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.voteForDepositor).toBe(false);
+      expect(result.data.txHash).toMatch(/^reveal-/);
+    }
+  });
+
+  it('accepts positional arguments', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const salt = new Uint8Array(32);
+
+    const result = await jurors.submitReveal('dsp-1', JUROR_ADDRESS, true, salt);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.disputeId).toBe('dsp-1');
+      expect(result.data.jurorAddress).toBe(JUROR_ADDRESS);
+      expect(result.data.voteForDepositor).toBe(true);
+    }
+  });
+
+  it('rejects a missing disputeId', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const salt = new Uint8Array(32);
+
+    const result = await jurors.submitReveal({
+      disputeId: '',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: true,
+      salt,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/disputeId/);
+    }
+  });
+
+  it('rejects an invalid juror address', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const salt = new Uint8Array(32);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: 'invalid-address',
+      voteForDepositor: true,
+      salt,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/jurorAddress/);
+    }
+  });
+
+  it('rejects abstain vote in submitReveal', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const salt = new Uint8Array(32);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      // @ts-expect-error deliberately passing abstain
+      voteForDepositor: 'abstain',
+      salt,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/abstain/);
+    }
+  });
+
+  it('rejects non-boolean voteForDepositor', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const salt = new Uint8Array(32);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      // @ts-expect-error deliberately passing string
+      voteForDepositor: 'yes',
+      salt,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/voteForDepositor must be a boolean/);
+    }
+  });
+
+  it('rejects missing or empty salt', async () => {
+    const jurors = new JurorClient(CONFIG);
+
+    const result = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: true,
+      // @ts-expect-error deliberately passing empty string
+      salt: '',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/salt/i);
+    }
+  });
+
+  it('rejects salt that is not 32 bytes', async () => {
+    const jurors = new JurorClient(CONFIG);
+
+    const resultShort = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: true,
+      salt: new Uint8Array(16),
+    });
+
+    expect(resultShort.ok).toBe(false);
+    if (!resultShort.ok) {
+      expect(resultShort.error).toMatch(/Salt must be exactly 32 bytes/);
+    }
+
+    const resultHex = await jurors.submitReveal({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      voteForDepositor: true,
+      salt: 'abcd',
+    });
+
+    expect(resultHex.ok).toBe(false);
+    if (!resultHex.ok) {
+      expect(resultHex.error).toMatch(/Salt must be exactly 32 bytes/);
+    }
+  });
+});
+

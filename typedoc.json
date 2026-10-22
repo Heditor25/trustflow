@@ -6,6 +6,7 @@
     "src/escrow/index.ts",
     "src/wallet/index.ts",
     "src/utils/index.ts",
+    "src/node/index.ts",
     "src/testing/index.ts"
   ],
   "out": "docs/reference",

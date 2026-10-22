@@ -104,4 +104,99 @@ describe('ProfileClient', () => {
       }
     });
   });
+
+  describe('constructor validation and overloads', () => {
+    it('constructs from ContractConfig object', () => {
+      const client = new ProfileClient({
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+        apiBaseUrl: 'http://api',
+        apiKey: 'secret-token',
+      });
+      expect(client).toBeDefined();
+    });
+
+    it('throws INVALID_CONFIG if apiUrl is empty or whitespace', () => {
+      expect(() => new ProfileClient('', 'token')).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG' }),
+      );
+      expect(() => new ProfileClient('   ', 'token')).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG' }),
+      );
+      expect(
+        () =>
+          new ProfileClient({
+            contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+            apiBaseUrl: '',
+            apiKey: 'token',
+          }),
+      ).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
+    });
+
+    it('throws INVALID_CONFIG if token is empty or whitespace', () => {
+      expect(() => new ProfileClient('http://api', '')).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG' }),
+      );
+      expect(() => new ProfileClient('http://api', '   ')).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG' }),
+      );
+      expect(
+        () =>
+          new ProfileClient({
+            contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+            apiBaseUrl: 'http://api',
+            apiKey: '',
+          }),
+      ).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
+    });
+  });
+
+  describe('updateProfile body validation', () => {
+    it('rejects displayName exceeding 100 characters', async () => {
+      const client = new ProfileClient('http://api', 'tok');
+      const result = await client.updateProfile(ADDRESS, { displayName: 'a'.repeat(101) });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/displayName/);
+      }
+      expect(mockHttpPut).not.toHaveBeenCalled();
+    });
+
+    it('rejects bio exceeding 500 characters', async () => {
+      const client = new ProfileClient('http://api', 'tok');
+      const result = await client.updateProfile(ADDRESS, { bio: 'b'.repeat(501) });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/bio/);
+      }
+      expect(mockHttpPut).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed avatarUrl', async () => {
+      const client = new ProfileClient('http://api', 'tok');
+      const result = await client.updateProfile(ADDRESS, { avatarUrl: 'not-a-valid-url' });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/avatarUrl/);
+      }
+      expect(mockHttpPut).not.toHaveBeenCalled();
+    });
+
+    it('accepts valid https and ipfs avatarUrl', async () => {
+      mockHttpPut.mockResolvedValue({ data: { address: ADDRESS } });
+      const client = new ProfileClient('http://api', 'tok');
+
+      const res1 = await client.updateProfile(ADDRESS, {
+        avatarUrl: 'https://example.com/avatar.png',
+      });
+      expect(res1.ok).toBe(true);
+
+      const res2 = await client.updateProfile(ADDRESS, {
+        avatarUrl: 'ipfs://bafybeic5678',
+      });
+      expect(res2.ok).toBe(true);
+    });
+  });
 });

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { TrustFlowError, TrustFlowClient, type TrustFlowErrorCode } from '../src';
 
 describe('TrustFlowError (Unified Error Model)', () => {
@@ -88,6 +90,20 @@ describe('TrustFlowError (Unified Error Model)', () => {
       expect(err).toBeInstanceOf(TrustFlowError);
       expect(err.code).toBe('MULTISIG_EXPIRED');
       expect(err.message).toBe('Multi-sig operation op-123 has expired');
+    });
+
+    it('creates multiSigAlreadySigned error', () => {
+      const err = TrustFlowError.multiSigAlreadySigned('GBXYZ');
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('MULTISIG_ALREADY_SIGNED');
+      expect(err.message).toBe('GBXYZ has already signed this operation');
+    });
+
+    it('creates duplicateSigner error', () => {
+      const err = TrustFlowError.duplicateSigner('GBXYZ');
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('DUPLICATE_SIGNER');
+      expect(err.message).toBe('GBXYZ has already signed this operation');
     });
 
     it('creates multiSigInvalidSigner error', () => {
@@ -196,5 +212,20 @@ describe('TrustFlowError (Unified Error Model)', () => {
       expect(err2.code).toBe('ACCOUNT_NOT_FOUND');
       expect(err2.message).toContain('No account context is active');
     });
+  });
+});
+
+describe('TrustFlowErrorCode union integrity (#432)', () => {
+  it('declares no duplicate members in the TrustFlowErrorCode union', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../src/errors.ts'), 'utf8');
+    const union = source.match(/export type TrustFlowErrorCode =([\s\S]*?);/)?.[1];
+    expect(union).toBeTruthy();
+
+    const codes = [...union!.matchAll(/'([A-Z0-9_]+)'/g)].map((m) => m[1]);
+    expect(codes.length).toBeGreaterThan(20);
+
+    const duplicates = codes.filter((code, i) => codes.indexOf(code) !== i);
+    expect(duplicates).toEqual([]);
+    expect(codes.filter((c) => c === 'INVALID_CONTRACT_CALL')).toHaveLength(1);
   });
 });

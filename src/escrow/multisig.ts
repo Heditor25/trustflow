@@ -6,6 +6,7 @@ import type { ContractConfig } from '../types/contract';
 import type {
   InitMultiSigParams,
   AddSignatureParams,
+  MultiSigConfig,
   MultiSigOperation,
   MultiSigOperationStatus,
   MultiSigOperationType,
@@ -212,6 +213,20 @@ export class MultiSigEscrowClient {
   }
 
   /**
+   * Retrieves the {@link MultiSigConfig} (escrowId, threshold, signers) for an operation.
+   * Returns undefined if the operationId is not found.
+   */
+  getConfig(operationId: string): MultiSigConfig | undefined {
+    const operation = this.operations.get(operationId);
+    if (!operation) return undefined;
+    return {
+      escrowId: operation.escrowId,
+      threshold: operation.threshold,
+      signers: [...operation.signers],
+    };
+  }
+
+  /**
    * Submits the assembled transaction to Horizon once the signature threshold is met.
    * All collected `DecoratedSignature` entries are merged into a single XDR envelope
    * before broadcast.
@@ -247,7 +262,12 @@ export class MultiSigEscrowClient {
 
     try {
       logger.debug('Submitting multi-sig operation', { operationId });
-      const submitted = await submitTransaction(assembledResult.data.xdr, horizonUrl, undefined, this.timeoutMs);
+      const submitted = await submitTransaction(
+        assembledResult.data.xdr,
+        horizonUrl,
+        undefined,
+        this.timeoutMs,
+      );
       this._markTerminal(operation, 'submitted');
       logger.info('Multi-sig operation submitted', { operationId, txHash: submitted.hash });
       return {
@@ -284,10 +304,7 @@ export class MultiSigEscrowClient {
     }
 
     try {
-      const xdrResult = this._mergeSignatures(
-        operation.unsignedXdr,
-        verifiedSignatures,
-      );
+      const xdrResult = this._mergeSignatures(operation.unsignedXdr, verifiedSignatures);
       return { ok: true, data: { xdr: xdrResult } };
     } catch (e) {
       return { ok: false, error: `XDR assembly failed: ${String(e)}` };
@@ -353,6 +370,11 @@ export class MultiSigEscrowClient {
    * making it available to subsequent `addSignature` / `getMultiSigStatus`
    * / `submitWhenReady` calls in this process.
    *
+   * Imported signatures are not trusted on the strength of their stored
+   * `verified` flag: each one is checked again against the snapshot's
+   * transaction, and any that no longer verify are kept as unverified, so they
+   * cannot count towards the threshold (#434).
+   *
    * Conflict semantics: this overwrites any existing local operation with
    * the same `operationId` — last write wins. If two processes both mutate
    * (e.g. `addSignature`) after diverging from the same exported snapshot
@@ -376,7 +398,9 @@ export class MultiSigEscrowClient {
     this.operations.set(operation.operationId, {
       ...operation,
       signers: [...operation.signers],
-      collectedSignatures: [...operation.collectedSignatures],
+      collectedSignatures: operation.collectedSignatures.map((entry) =>
+        this._reverifyImportedEntry(entry, snapshot),
+      ),
     });
     return { ok: true, data: { operationId: operation.operationId } };
   }
@@ -413,8 +437,26 @@ export class MultiSigEscrowClient {
     if (!Array.isArray(snapshot.signers)) {
       return { ok: false, error: 'snapshot.signers must be an array' };
     }
+    for (const [index, signer] of snapshot.signers.entries()) {
+      if (typeof signer !== 'string' || !isValidStellarAddress(signer)) {
+        return { ok: false, error: `snapshot.signers[${index}] is not a valid Stellar address` };
+      }
+    }
     if (!Array.isArray(snapshot.collectedSignatures)) {
       return { ok: false, error: 'snapshot.collectedSignatures must be an array' };
+    }
+    for (const [index, entry] of snapshot.collectedSignatures.entries()) {
+      if (
+        !entry ||
+        typeof entry.signerAddress !== 'string' ||
+        typeof entry.signedXdr !== 'string' ||
+        typeof entry.addedAt !== 'number'
+      ) {
+        return {
+          ok: false,
+          error: `snapshot.collectedSignatures[${index}] must have signerAddress, signedXdr and addedAt`,
+        };
+      }
     }
     if (typeof snapshot.threshold !== 'number' || snapshot.threshold < 1) {
       return { ok: false, error: 'snapshot.threshold must be a number >= 1' };
@@ -424,6 +466,28 @@ export class MultiSigEscrowClient {
       return { ok: false, error: `snapshot.status must be one of: ${validStatuses.join(', ')}` };
     }
     return { ok: true };
+  }
+
+  /**
+   * Re-runs the signature check on an imported entry. Only an entry whose
+   * signature still verifies against the snapshot's transaction keeps
+   * `verified: true`; anything else is downgraded to unverified.
+   */
+  private _reverifyImportedEntry(
+    entry: SignatureEntry,
+    snapshot: MultiSigStateSnapshot,
+  ): SignatureEntry {
+    const verification = this._verifySignedXdr(
+      entry.signedXdr,
+      snapshot.unsignedXdr,
+      entry.signerAddress,
+      snapshot.networkPassphrase,
+    );
+    if (!verification.ok) {
+      const { verifiedAt: _verifiedAt, ...unverified } = entry;
+      return { ...unverified, verified: false };
+    }
+    return { ...entry, verified: true, verifiedAt: Date.now() };
   }
 
   private _validateInitParams(params: InitMultiSigParams): InitMultiSigResult | { ok: true } {
@@ -603,10 +667,13 @@ export class MultiSigEscrowClient {
   }
 
   /**
-   * Returns the number of cryptographically verified signatures in an operation.
+   * Returns the number of distinct cryptographically verified signers in an operation.
    */
   private _getVerifiedCount(operation: MultiSigOperation): number {
-    return operation.collectedSignatures.filter((s) => s.verified).length;
+    const verifiedSigners = new Set(
+      operation.collectedSignatures.filter((s) => s.verified).map((s) => s.signerAddress),
+    );
+    return verifiedSigners.size;
   }
 
   /**
@@ -702,9 +769,9 @@ export class MultiSigEscrowClient {
 
   private _buildStatus(operation: MultiSigOperation): MultiSigStatus {
     const verifiedEntries = operation.collectedSignatures.filter((s) => s.verified);
-    const signersSigned = verifiedEntries.map((s) => s.signerAddress);
+    const signersSigned = Array.from(new Set(verifiedEntries.map((s) => s.signerAddress)));
     const signersRemaining = operation.signers.filter((s) => !signersSigned.includes(s));
-    const verifiedCount = verifiedEntries.length;
+    const verifiedCount = signersSigned.length;
 
     return {
       operationId: operation.operationId,

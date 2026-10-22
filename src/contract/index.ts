@@ -22,10 +22,13 @@ export { simulateContractCall } from './simulate';
 export { simulateTransaction, type SimulationOutcome } from './simulation';
 export {
   buildCreateEscrowArgs,
+  buildCancelArgs,
   buildReleaseArgs,
   buildClaimArgs,
   buildFundArgs,
   buildDisputeArgs,
   buildVoteArgs,
+  buildRevealArgs,
 } from './build';
-export type { SimulationResult, SimulateContractCallOptions } from './simulate';
+export type { SimulationResult, SimulateContractCallOptions, ResourceFootprint } from './simulate';
+export { estimateResourceFootprint, STROOPS_PER_XLM } from './simulate';
